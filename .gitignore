@@ -223,3 +223,7 @@ __marimo__/
 models/
 *.pkl
 *.faiss
+
+# Log files
+logs/
+*.log

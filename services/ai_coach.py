@@ -1,5 +1,8 @@
 # ai_coach_dashboard.py - COMPLETE COMPREHENSIVE TELECOM TRAINING COACH
 import os
+import logging
+import sys
+from datetime import datetime
 from typing import Dict
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -17,8 +20,21 @@ import httpx
 from langchain_community.embeddings import HuggingFaceBgeEmbeddings
 from dotenv import load_dotenv
 
+# Configure logging
+os.makedirs('logs', exist_ok=True)
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler(f'logs/ai_coach_{datetime.now().strftime("%Y%m%d")}.log')
+    ]
+)
+logger = logging.getLogger(__name__)
+
 # Load environment variables from .env file
 load_dotenv()
+logger.info("Environment variables loaded from .env file")
 
 # Configuration
 FAISS_ROOT = "./services/faiss_indexes/"
@@ -28,18 +44,33 @@ EMBEDDINGS = HuggingFaceBgeEmbeddings(
             encode_kwargs={"normalize_embeddings": True},#True enabling Semantic search
     )
 def get_eli_chat_model(temperature: float = 0.0, model_name: str = "qwen2.5-7b"):
+    logger.info("="*80)
+    logger.info("INITIALIZING LLM CONNECTION")
+    logger.info(f"  Model: {model_name}")
+    logger.info(f"  Temperature: {temperature}")
+    logger.info("="*80)
+    
     # Get API key and base URL from environment variables
     api_key = os.getenv("ELI_API_KEY", "Replace with your ELI API key")
     base_url = os.getenv("ELI_BASE_URL", "http://localhost:11434/v1")
     
+    logger.debug(f"Retrieved ELI_BASE_URL: {base_url}")
+    logger.debug(f"API key present: {bool(api_key and api_key != 'Replace with your ELI API key')}")
+    
     if not api_key or api_key == "":
+        logger.error("ELI_API_KEY not found in environment variables")
         raise ValueError("ELI_API_KEY not found in environment variables. Please set it in .env file.")
     if not base_url or base_url == "":
+        logger.error("ELI_BASE_URL not found in environment variables")
         raise ValueError("ELI_BASE_URL not found in environment variables. Please set it in .env file.")
+    
+    logger.info(f"Attempting to connect to LLM at: {base_url}")
+    logger.debug(f"Connection parameters: model={model_name}, temperature={temperature}, max_retries=2")
     
     # Create an instance of ChatOpenAI (compatible with openai<1.0.0 and langchain-openai<0.0.5)
     # For older versions, try both parameter naming conventions
     try:
+        logger.debug("Trying ChatOpenAI with openai_api_key and openai_api_base parameters")
         llm = ChatOpenAI(
             model=model_name,
             temperature=temperature,
@@ -49,19 +80,43 @@ def get_eli_chat_model(temperature: float = 0.0, model_name: str = "qwen2.5-7b")
             openai_api_key=api_key,
             openai_api_base=base_url,
         )
-    except TypeError:
+        logger.info("LLM connection established successfully (using openai_api_key/openai_api_base)")
+    except TypeError as e:
+        logger.warning(f"TypeError with openai_api_key parameters: {str(e)}")
+        logger.debug("Falling back to api_key/base_url parameters")
         # Fallback to newer parameter names if old ones don't work
-        llm = ChatOpenAI(
-            model=model_name,
-            temperature=temperature,
-            max_tokens=None,
-            timeout=None,
-            max_retries=2,
-            api_key=api_key,
-            base_url=base_url,
-        )
+        try:
+            llm = ChatOpenAI(
+                model=model_name,
+                temperature=temperature,
+                max_tokens=None,
+                timeout=None,
+                max_retries=2,
+                api_key=api_key,
+                base_url=base_url,
+            )
+            logger.info("LLM connection established successfully (using api_key/base_url)")
+        except Exception as e2:
+            logger.error(f"Failed to connect with both parameter sets")
+            logger.error(f"First error: {str(e)}")
+            logger.error(f"Second error: {str(e2)}")
+            raise
+    except Exception as e:
+        logger.error(f"Failed to initialize LLM connection: {str(e)}")
+        logger.exception("Full traceback:")
+        raise
+    
+    logger.info("LLM connection initialized and ready")
+    logger.info("="*80)
     return llm
-LLM = get_eli_chat_model()
+try:
+    LLM = get_eli_chat_model()
+    logger.info("Global LLM instance created successfully")
+except Exception as e:
+    logger.error(f"CRITICAL: Failed to create global LLM instance: {str(e)}")
+    logger.exception("Full traceback:")
+    raise
+
 console = Console()
 
 class TrainingContentInput(BaseModel):
@@ -73,32 +128,64 @@ class TrainingContentInput(BaseModel):
 @tool(args_schema=TrainingContentInput)
 def retrieve_training_content(knowledge_base: str, level: str, topic: str = "") -> str:
     """Retrieve comprehensive training content from specific knowledge base"""
+    logger.info("="*80)
+    logger.info("RETRIEVING TRAINING CONTENT FROM FAISS")
+    logger.info(f"  Knowledge Base: {knowledge_base}")
+    logger.info(f"  Level: {level}")
+    logger.info(f"  Topic: {topic}")
+    logger.info("="*80)
+    
     index_path = Path(f"{FAISS_ROOT}/{knowledge_base}")
+    logger.debug(f"FAISS index path: {index_path}")
+    
     if not index_path.exists():
+        logger.error(f"FAISS index not found at: {index_path}")
         return f"❌ No {knowledge_base} knowledge base available"
     
     try:
+        logger.info(f"Loading FAISS vectorstore from: {index_path}")
         vectorstore = FAISS.load_local(
             str(index_path),
             EMBEDDINGS,
             allow_dangerous_deserialization=True
         )
+        logger.info("FAISS vectorstore loaded successfully")
     except Exception as e:
+        logger.error(f"Error loading FAISS vectorstore: {str(e)}")
+        logger.exception("Full traceback:")
         return f"❌ Error loading {knowledge_base}: {str(e)}"
     
     # Enhanced query for comprehensive retrieval
     query = f"{knowledge_base} {level} training {topic} fundamentals concepts design details architecture commands ".strip()
-    docs = vectorstore.similarity_search(query, k=10)  # Maximum relevant docs
+    logger.info(f"Performing similarity search with query: {query[:100]}...")
+    logger.debug(f"Search parameters: k=10 (top 10 documents)")
+    
+    try:
+        docs = vectorstore.similarity_search(query, k=10)  # Maximum relevant docs
+        logger.info(f"Similarity search completed: found {len(docs)} documents")
+    except Exception as e:
+        logger.error(f"Error during similarity search: {str(e)}")
+        logger.exception("Full traceback:")
+        return f"❌ Error searching {knowledge_base}: {str(e)}"
     
     content = []
     for i, doc in enumerate(docs, 1):
+        doc_source = Path(doc.metadata.get('source', 'N/A')).name
+        doc_page = doc.metadata.get('page', 'N/A')
+        doc_length = len(doc.page_content)
+        logger.debug(f"Document {i}: source={doc_source}, page={doc_page}, length={doc_length} chars")
+        
         content.append(
             f"=== 📄 DOCUMENT {i} ===\n"
-            f"📁 Source: {Path(doc.metadata.get('source', 'N/A')).name}\n"
-            f"📍 Page: {doc.metadata.get('page', 'N/A')}\n"
+            f"📁 Source: {doc_source}\n"
+            f"📍 Page: {doc_page}\n"
             f"📝 Extracted Content:\n{doc.page_content}\n{'='*80}"
         )
-    return "\n\n".join(content)
+    
+    result = "\n\n".join(content)
+    logger.info(f"Retrieved content assembled: {len(result)} total characters from {len(docs)} documents")
+    logger.info("="*80)
+    return result
 
 class ComprehensiveTrainingCoach:
     def __init__(self):
@@ -275,8 +362,14 @@ class ComprehensiveTrainingCoach:
     
     def generate_comprehensive_lesson(self, knowledge_base: str, level: str, docs: str) -> str:
         """Generate LEVEL-SPECIFIC training lesson from knowledge base ONLY"""
+        logger.info("="*80)
+        logger.info("GENERATING COMPREHENSIVE LESSON")
+        logger.info(f"  Knowledge Base: {knowledge_base}")
+        logger.info(f"  Level: {level}")
+        logger.info(f"  Input docs length: {len(docs)} characters")
+        logger.info("="*80)
     
-    # Level-specific depth instructions
+        # Level-specific depth instructions
         level_configs = {
         "beginner": {
             "instructions": "Use simple language, basic concepts, step-by-step explanations. Avoid advanced terminology unless explained.",
@@ -296,11 +389,13 @@ class ComprehensiveTrainingCoach:
         }
         }
     
-    # ✅ EXTRACT VALUES BEFORE TEMPLATE (FIXES [] indexing)
+        # ✅ EXTRACT VALUES BEFORE TEMPLATE (FIXES [] indexing)
         level_config = level_configs.get(level.lower(), level_configs["beginner"])
         level_depth = level_config["depth"]           # ✅ Pre-compute
         level_instructions = level_config["instructions"]  # ✅ Pre-compute
         level_upper = level.upper()
+        
+        logger.debug(f"Level config: depth={level_depth}, instructions={level_instructions[:50]}...")
     
         prompt = ChatPromptTemplate.from_template("""
 You are **Ericsson Senior Telecom Architect** specializing in {knowledge_base}.
@@ -351,16 +446,46 @@ Don't hallucinate.
 GENERATE LESSON:
     """)
     
+        logger.info("Building prompt chain (prompt | LLM | StrOutputParser)")
         chain = prompt | LLM | StrOutputParser()
     
-        return chain.invoke({
-        "knowledge_base": knowledge_base,
-        "level": level,
-        "docs": docs,
-        "level_upper": level_upper,
-        "level_depth": level_depth,           # ✅ Simple variable
-        "level_instructions": level_instructions  # ✅ Simple variable
-        })
+        # Prepare prompt variables
+        prompt_vars = {
+            "knowledge_base": knowledge_base,
+            "level": level,
+            "docs": docs,
+            "level_upper": level_upper,
+            "level_depth": level_depth,
+            "level_instructions": level_instructions
+        }
+        
+        logger.info("="*80)
+        logger.info("SENDING PROMPT TO LLM")
+        logger.info(f"  Knowledge Base: {knowledge_base}")
+        logger.info(f"  Level: {level} ({level_upper})")
+        logger.info(f"  Depth: {level_depth}")
+        logger.info(f"  Docs length: {len(docs)} characters")
+        logger.debug(f"  Full prompt variables: {list(prompt_vars.keys())}")
+        logger.info("="*80)
+        
+        try:
+            logger.info("Invoking LLM chain...")
+            result = chain.invoke(prompt_vars)
+            logger.info("="*80)
+            logger.info("LLM RESPONSE RECEIVED")
+            logger.info(f"  Response length: {len(result)} characters")
+            logger.debug(f"  Response preview (first 200 chars): {result[:200]}...")
+            logger.info("="*80)
+            return result
+        except Exception as e:
+            logger.error("="*80)
+            logger.error("LLM INVOCATION FAILED")
+            logger.error(f"  Error: {str(e)}")
+            logger.error(f"  Knowledge Base: {knowledge_base}")
+            logger.error(f"  Level: {level}")
+            logger.exception("Full traceback:")
+            logger.error("="*80)
+            raise
     def handle_comprehensive_doubts(self, knowledge_base: str, current_level: str):
         """Production-grade doubt clearing"""
         console.print("\n🆘 [bold red]EXPERT TECHNICAL SUPPORT[/bold red]")
@@ -386,11 +511,19 @@ GENERATE LESSON:
     
     def answer_comprehensive_doubt(self, knowledge_base: str, doubt: str) -> str:
         """Comprehensive technical doubt resolution"""
+        logger.info("="*80)
+        logger.info("ANSWERING COMPREHENSIVE DOUBT")
+        logger.info(f"  Knowledge Base: {knowledge_base}")
+        logger.info(f"  Doubt: {doubt[:100]}..." if len(doubt) > 100 else f"  Doubt: {doubt}")
+        logger.info("="*80)
+        
+        logger.info("Retrieving relevant content for doubt resolution...")
         docs = retrieve_training_content.invoke({
             "knowledge_base": knowledge_base,
             "level": "advanced",
             "topic": doubt
         })
+        logger.info(f"Retrieved {len(docs)} characters of context documents")
         
         prompt = ChatPromptTemplate.from_template("""
         Resolve **production-critical doubt** using ONLY {knowledge_base}:
@@ -413,8 +546,35 @@ GENERATE LESSON:
 
         RESPONSE:""")
         
+        logger.info("Building prompt chain for doubt resolution")
         chain = prompt | LLM | StrOutputParser()
-        return chain.invoke({"knowledge_base": knowledge_base, "doubt": doubt, "docs": docs})
+        
+        prompt_vars = {"knowledge_base": knowledge_base, "doubt": doubt, "docs": docs}
+        logger.info("="*80)
+        logger.info("SENDING DOUBT RESOLUTION PROMPT TO LLM")
+        logger.info(f"  Knowledge Base: {knowledge_base}")
+        logger.info(f"  Doubt length: {len(doubt)} characters")
+        logger.info(f"  Context docs length: {len(docs)} characters")
+        logger.info("="*80)
+        
+        try:
+            logger.info("Invoking LLM chain for doubt resolution...")
+            result = chain.invoke(prompt_vars)
+            logger.info("="*80)
+            logger.info("DOUBT RESOLUTION RESPONSE RECEIVED")
+            logger.info(f"  Response length: {len(result)} characters")
+            logger.debug(f"  Response preview (first 200 chars): {result[:200]}...")
+            logger.info("="*80)
+            return result
+        except Exception as e:
+            logger.error("="*80)
+            logger.error("DOUBT RESOLUTION LLM INVOCATION FAILED")
+            logger.error(f"  Error: {str(e)}")
+            logger.error(f"  Knowledge Base: {knowledge_base}")
+            logger.error(f"  Doubt: {doubt}")
+            logger.exception("Full traceback:")
+            logger.error("="*80)
+            raise
     
     def run(self):
         """Main enterprise training platform"""
