@@ -106,18 +106,45 @@ def get_llm():
             raise
     return _LLM
 
-# For backward compatibility - create a proxy class that lazily initializes
+# For backward compatibility - create a proxy that works with LangChain's pipe operator
+# The proxy needs to implement __or__ and __ror__ to work with the | operator
 class LLMProxy:
     """Proxy class that lazily initializes the LLM when accessed"""
+    _llm_instance = None
+    
+    def _get_llm(self):
+        """Get the actual LLM instance"""
+        if self._llm_instance is None:
+            self._llm_instance = get_llm()
+        return self._llm_instance
+    
     def __getattr__(self, name):
-        llm = get_llm()
-        return getattr(llm, name)
+        """Delegate all attribute access to the actual LLM"""
+        return getattr(self._get_llm(), name)
     
     def __call__(self, *args, **kwargs):
-        return get_llm()(*args, **kwargs)
+        """Make the proxy callable"""
+        return self._get_llm()(*args, **kwargs)
     
     def invoke(self, *args, **kwargs):
-        return get_llm().invoke(*args, **kwargs)
+        """Invoke method for LangChain"""
+        return self._get_llm().invoke(*args, **kwargs)
+    
+    def __or__(self, other):
+        """Support for LangChain pipe operator: LLM | parser"""
+        return self._get_llm() | other
+    
+    def __ror__(self, other):
+        """Support for LangChain pipe operator: prompt | LLM"""
+        return other | self._get_llm()
+    
+    def __getstate__(self):
+        """Support for pickling"""
+        return {}
+    
+    def __setstate__(self, state):
+        """Support for unpickling"""
+        self._llm_instance = None
 
 # Create module-level LLM proxy
 LLM = LLMProxy()
