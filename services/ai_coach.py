@@ -74,15 +74,20 @@ def get_eli_chat_model(temperature: float = 0.0, model_name: str = "qwen2.5-7b")
     
     # Create httpx client with SSL verification setting
     # This is needed for Windows machines with certificate issues
-    http_client = None
+    # In newer OpenAI SDK (v1.x) and langchain-openai, we need to pass http_client
+    # Note: ChatOpenAI accepts http_client parameter directly in v0.2.0+
+    http_client_kwargs = {}
     if not ssl_verify:
         logger.warning("SSL certificate verification is DISABLED - use only in trusted/internal networks!")
+        # Create httpx client with SSL verification disabled
         http_client = httpx.Client(verify=False, timeout=None)
-    else:
-        http_client = httpx.Client(verify=True, timeout=None)
+        # Pass http_client to ChatOpenAI - it will use it for the underlying OpenAI client
+        http_client_kwargs['http_client'] = http_client
+    # If ssl_verify is True, we don't need to pass http_client (uses default with verification)
     
     # Create an instance of ChatOpenAI using latest LangChain OpenAI API (v0.2.0+)
     # Latest API uses api_key and base_url parameters
+    # http_client parameter is passed to control SSL verification
     try:
         logger.debug("Creating ChatOpenAI instance with latest API (api_key/base_url)")
         llm = ChatOpenAI(
@@ -93,7 +98,7 @@ def get_eli_chat_model(temperature: float = 0.0, model_name: str = "qwen2.5-7b")
             max_retries=2,
             api_key=api_key,
             base_url=base_url,
-            http_client=http_client,
+            **http_client_kwargs,  # Only includes http_client if SSL verification is disabled
         )
         logger.info("LLM connection established successfully")
     except Exception as e:
@@ -138,8 +143,9 @@ class LLMProxy:
         return getattr(self._get_llm(), name)
     
     def __call__(self, *args, **kwargs):
-        """Make the proxy callable"""
-        return self._get_llm()(*args, **kwargs)
+        """Make the proxy callable - ChatOpenAI uses invoke(), not direct call"""
+        # ChatOpenAI objects are not directly callable, they use invoke()
+        return self._get_llm().invoke(*args, **kwargs)
     
     def invoke(self, *args, **kwargs):
         """Invoke method for LangChain"""
