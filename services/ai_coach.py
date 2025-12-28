@@ -5,7 +5,7 @@ import sys
 from datetime import datetime
 from typing import Dict
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
 from langchain_community.vectorstores import FAISS
 from langchain_core.tools import tool
 from langchain_core.output_parsers import StrOutputParser
@@ -67,40 +67,20 @@ def get_eli_chat_model(temperature: float = 0.0, model_name: str = "qwen2.5-7b")
     logger.info(f"Attempting to connect to LLM at: {base_url}")
     logger.debug(f"Connection parameters: model={model_name}, temperature={temperature}, max_retries=2")
     
-    # Create an instance of ChatOpenAI (compatible with openai<1.0.0 and langchain-openai<0.0.5)
-    # For older versions, try both parameter naming conventions
+    # Create an instance of ChatOpenAI using latest LangChain OpenAI API (v0.2.0+)
+    # Latest API uses api_key and base_url parameters
     try:
-        logger.debug("Trying ChatOpenAI with openai_api_key and openai_api_base parameters")
+        logger.debug("Creating ChatOpenAI instance with latest API (api_key/base_url)")
         llm = ChatOpenAI(
             model=model_name,
             temperature=temperature,
             max_tokens=None,
             timeout=None,
             max_retries=2,
-            openai_api_key=api_key,
-            openai_api_base=base_url,
+            api_key=api_key,
+            base_url=base_url,
         )
-        logger.info("LLM connection established successfully (using openai_api_key/openai_api_base)")
-    except TypeError as e:
-        logger.warning(f"TypeError with openai_api_key parameters: {str(e)}")
-        logger.debug("Falling back to api_key/base_url parameters")
-        # Fallback to newer parameter names if old ones don't work
-        try:
-            llm = ChatOpenAI(
-                model=model_name,
-                temperature=temperature,
-                max_tokens=None,
-                timeout=None,
-                max_retries=2,
-                api_key=api_key,
-                base_url=base_url,
-            )
-            logger.info("LLM connection established successfully (using api_key/base_url)")
-        except Exception as e2:
-            logger.error(f"Failed to connect with both parameter sets")
-            logger.error(f"First error: {str(e)}")
-            logger.error(f"Second error: {str(e2)}")
-            raise
+        logger.info("LLM connection established successfully")
     except Exception as e:
         logger.error(f"Failed to initialize LLM connection: {str(e)}")
         logger.exception("Full traceback:")
@@ -109,21 +89,56 @@ def get_eli_chat_model(temperature: float = 0.0, model_name: str = "qwen2.5-7b")
     logger.info("LLM connection initialized and ready")
     logger.info("="*80)
     return llm
-try:
-    LLM = get_eli_chat_model()
-    logger.info("Global LLM instance created successfully")
-except Exception as e:
-    logger.error(f"CRITICAL: Failed to create global LLM instance: {str(e)}")
-    logger.exception("Full traceback:")
-    raise
+
+# Lazy initialization of LLM to avoid import-time failures
+_LLM = None
+
+def get_llm():
+    """Get or create the global LLM instance (lazy initialization)"""
+    global _LLM
+    if _LLM is None:
+        try:
+            _LLM = get_eli_chat_model()
+            logger.info("Global LLM instance created successfully")
+        except Exception as e:
+            logger.error(f"CRITICAL: Failed to create global LLM instance: {str(e)}")
+            logger.exception("Full traceback:")
+            raise
+    return _LLM
+
+# For backward compatibility - create a proxy class that lazily initializes
+class LLMProxy:
+    """Proxy class that lazily initializes the LLM when accessed"""
+    def __getattr__(self, name):
+        llm = get_llm()
+        return getattr(llm, name)
+    
+    def __call__(self, *args, **kwargs):
+        return get_llm()(*args, **kwargs)
+    
+    def invoke(self, *args, **kwargs):
+        return get_llm().invoke(*args, **kwargs)
+
+# Create module-level LLM proxy
+LLM = LLMProxy()
 
 console = Console()
 
 class TrainingContentInput(BaseModel):
     """Input schema for comprehensive training content"""
-    knowledge_base: str = Field(..., description="'mml' or 'alarm_handling'")
-    level: str = Field(..., description="'beginner', 'intermediate', 'advanced', 'architecture'")
-    topic: str = Field("", description="Specific topic for doubt clearing")
+    knowledge_base: str = Field(description="'mml' or 'alarm_handling'")
+    level: str = Field(description="'beginner', 'intermediate', 'advanced', 'architecture'")
+    topic: str = Field(default="", description="Specific topic for doubt clearing")
+    
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "knowledge_base": "mml",
+                "level": "beginner",
+                "topic": ""
+            }
+        }
+    }
 
 @tool(args_schema=TrainingContentInput)
 def retrieve_training_content(knowledge_base: str, level: str, topic: str = "") -> str:

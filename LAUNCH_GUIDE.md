@@ -3,7 +3,7 @@
 ## 📋 Prerequisites
 
 ### System Requirements
-- Python 3.7 or higher
+- Python 3.13 or higher
 - pip (Python package manager)
 - Git (optional, for cloning)
 
