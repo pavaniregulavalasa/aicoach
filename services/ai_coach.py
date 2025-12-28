@@ -15,7 +15,6 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 import httpx
 from langchain_community.embeddings import HuggingFaceBgeEmbeddings
-from openai import OpenAI
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -38,24 +37,29 @@ def get_eli_chat_model(temperature: float = 0.0, model_name: str = "qwen2.5-7b")
     if not base_url or base_url == "":
         raise ValueError("ELI_BASE_URL not found in environment variables. Please set it in .env file.")
     
-    # Create an instance of the OpenAI client
-    client = OpenAI(
-        api_key=api_key,
-        base_url=base_url,
-        http_client=httpx.Client(verify=False),
-    )
-    # Create an instance of ChatOpenAI
-    llm = ChatOpenAI(
-        model=model_name,
-        temperature=temperature,
-        max_tokens=None,
-        timeout=None,
-        max_retries=2,
-        api_key=api_key,
-        base_url=base_url,
-    )
-    # Now we plug the OpenAI client into our langchain-openai interface
-    llm.client = client.chat.completions
+    # Create an instance of ChatOpenAI (compatible with openai<1.0.0 and langchain-openai<0.0.5)
+    # For older versions, try both parameter naming conventions
+    try:
+        llm = ChatOpenAI(
+            model=model_name,
+            temperature=temperature,
+            max_tokens=None,
+            timeout=None,
+            max_retries=2,
+            openai_api_key=api_key,
+            openai_api_base=base_url,
+        )
+    except TypeError:
+        # Fallback to newer parameter names if old ones don't work
+        llm = ChatOpenAI(
+            model=model_name,
+            temperature=temperature,
+            max_tokens=None,
+            timeout=None,
+            max_retries=2,
+            api_key=api_key,
+            base_url=base_url,
+        )
     return llm
 LLM = get_eli_chat_model()
 console = Console()

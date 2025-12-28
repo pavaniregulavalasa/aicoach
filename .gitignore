@@ -205,3 +205,21 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Streamlit
+.streamlit/
+
+# FAISS indexes (generated files - uncomment if you want to ignore them)
+# services/faiss_indexes/
+
+# Model cache directories
+.cache/
+models/
+*.pkl
+*.faiss
