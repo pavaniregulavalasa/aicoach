@@ -54,8 +54,13 @@ def get_eli_chat_model(temperature: float = 0.0, model_name: str = "qwen2.5-7b")
     api_key = os.getenv("ELI_API_KEY", "Replace with your ELI API key")
     base_url = os.getenv("ELI_BASE_URL", "http://localhost:11434/v1")
     
+    # Get SSL verification setting (default: True, set to "false" or "0" to disable)
+    ssl_verify_str = os.getenv("ELI_SSL_VERIFY", "true").lower()
+    ssl_verify = ssl_verify_str not in ("false", "0", "no", "off")
+    
     logger.debug(f"Retrieved ELI_BASE_URL: {base_url}")
     logger.debug(f"API key present: {bool(api_key and api_key != 'Replace with your ELI API key')}")
+    logger.debug(f"SSL verification: {ssl_verify}")
     
     if not api_key or api_key == "":
         logger.error("ELI_API_KEY not found in environment variables")
@@ -65,7 +70,16 @@ def get_eli_chat_model(temperature: float = 0.0, model_name: str = "qwen2.5-7b")
         raise ValueError("ELI_BASE_URL not found in environment variables. Please set it in .env file.")
     
     logger.info(f"Attempting to connect to LLM at: {base_url}")
-    logger.debug(f"Connection parameters: model={model_name}, temperature={temperature}, max_retries=2")
+    logger.debug(f"Connection parameters: model={model_name}, temperature={temperature}, max_retries=2, ssl_verify={ssl_verify}")
+    
+    # Create httpx client with SSL verification setting
+    # This is needed for Windows machines with certificate issues
+    http_client = None
+    if not ssl_verify:
+        logger.warning("SSL certificate verification is DISABLED - use only in trusted/internal networks!")
+        http_client = httpx.Client(verify=False, timeout=None)
+    else:
+        http_client = httpx.Client(verify=True, timeout=None)
     
     # Create an instance of ChatOpenAI using latest LangChain OpenAI API (v0.2.0+)
     # Latest API uses api_key and base_url parameters
@@ -79,6 +93,7 @@ def get_eli_chat_model(temperature: float = 0.0, model_name: str = "qwen2.5-7b")
             max_retries=2,
             api_key=api_key,
             base_url=base_url,
+            http_client=http_client,
         )
         logger.info("LLM connection established successfully")
     except Exception as e:

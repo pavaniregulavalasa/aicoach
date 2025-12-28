@@ -71,6 +71,13 @@ ELI_API_KEY=your-eli-api-key-here
 ELI_BASE_URL=https://gateway.eli.gaia.gic.ericsson.se/api/openai/v1
 ```
 
+**Optional variables** (for Windows/SSL certificate issues):
+```bash
+# Set to "false" to disable SSL certificate verification
+# WARNING: Only use in trusted/internal networks!
+ELI_SSL_VERIFY=false
+```
+
 **Security Note**: Never commit `.env` file to git! It's already in `.gitignore`.
 
 ### Step 4: Create FAISS Indexes (Optional but Recommended)
