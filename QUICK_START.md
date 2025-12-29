@@ -11,7 +11,7 @@
    ```bash
    # For local Ollama
    LLM_MODE=local
-   LLM_MODEL=qwen2.5-7b
+   LLM_MODEL=qwen2.5:7b
    
    # OR for remote ELI gateway
    LLM_MODE=remote

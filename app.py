@@ -42,25 +42,37 @@ level = st.sidebar.selectbox(
 
 if st.sidebar.button("Start Training"):
     with st.spinner("Fetching personalized training..."):
-        response = requests.post("http://127.0.0.1:8000/training", json={"level": level.lower(), "knowledge_base": "mml"})
-        
-        if response.status_code == 200:
-            data = response.json()
-            # Check if response contains error or training content
-            if "error" in data:
-                st.error(f"❌ Error: {data.get('error', 'Unknown error')}")
-                if "message" in data:
-                    st.info(f"💡 {data['message']}")
-            elif "training_content" in data:
-                st.subheader(f"📚 {level} Level Training")
-                st.markdown(data["training_content"])
+        try:
+            response = requests.post(
+                "http://127.0.0.1:8000/training", 
+                json={"level": level.lower(), "knowledge_base": "mml"},
+                timeout=180  # Increased timeout for LLM operations (2 minutes)
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                # Check if response contains error or training content
+                if "error" in data:
+                    st.error(f"❌ Error: {data.get('error', 'Unknown error')}")
+                    if "message" in data:
+                        st.info(f"💡 {data['message']}")
+                elif "training_content" in data:
+                    st.subheader(f"📚 {level} Level Training")
+                    st.markdown(data["training_content"])
+                else:
+                    st.warning("Unexpected response format from server.")
             else:
-                st.warning("Unexpected response format from server.")
-        else:
-            st.error(f"Failed to fetch training content. Status code: {response.status_code}")
-            try:
-                error_data = response.json()
-                if "error" in error_data:
-                    st.error(f"Error: {error_data['error']}")
-            except:
-                st.error("Please try again later.")
+                st.error(f"Failed to fetch training content. Status code: {response.status_code}")
+                try:
+                    error_data = response.json()
+                    if "error" in error_data:
+                        st.error(f"Error: {error_data['error']}")
+                except:
+                    st.error("Please try again later.")
+        except requests.exceptions.ConnectionError:
+            st.error("❌ **Backend not available!** Please ensure the backend server is running on http://127.0.0.1:8000")
+            st.info("💡 Start the backend with: `./run_backend.sh`")
+        except requests.exceptions.Timeout:
+            st.error("⏱️ **Request timed out!** The backend may be slow or unresponsive.")
+        except Exception as e:
+            st.error(f"❌ **Error:** {str(e)}")

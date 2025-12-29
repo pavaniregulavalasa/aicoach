@@ -30,31 +30,39 @@ if st.button("Start Training"):
         }
 
         # Send the request to the backend
-        response = requests.post("http://127.0.0.1:8000/training", json=payload)
-
-        if response.status_code == 200:
-            data = response.json()
-            # Check if response contains error or training content
-            if "error" in data:
-                st.error(f"❌ Error: {data.get('error', 'Unknown error')}")
-                if "message" in data:
-                    st.info(f"💡 {data['message']}")
-                    st.markdown("""
-                    **To fix this:**
-                    1. Ensure you have PDF documents in the `./knowledge/` directory
-                    2. Run: `python services/rag.py` to create FAISS indexes
-                    """)
-            elif "training_content" in data:
-                st.subheader(f"📖 {level} Level Training on {knowledge_base.upper()}")
-                st.markdown(data["training_content"])
+        try:
+            response = requests.post("http://127.0.0.1:8000/training", json=payload, timeout=180)
+            
+            if response.status_code == 200:
+                data = response.json()
+                # Check if response contains error or training content
+                if "error" in data:
+                    st.error(f"❌ Error: {data.get('error', 'Unknown error')}")
+                    if "message" in data:
+                        st.info(f"💡 {data['message']}")
+                        st.markdown("""
+                        **To fix this:**
+                        1. Ensure you have PDF documents in the `./knowledge/` directory
+                        2. Run: `python services/rag.py` to create FAISS indexes
+                        """)
+                elif "training_content" in data:
+                    st.subheader(f"📖 {level} Level Training on {knowledge_base.upper()}")
+                    st.markdown(data["training_content"])
+                else:
+                    st.warning("Unexpected response format from server.")
             else:
-                st.warning("Unexpected response format from server.")
-        else:
-            st.error(f"Failed to fetch training content. Status code: {response.status_code}")
-            try:
-                error_data = response.json()
-                if "error" in error_data:
-                    st.error(f"Error: {error_data['error']}")
-            except:
-                st.error("Please try again later.")
+                st.error(f"Failed to fetch training content. Status code: {response.status_code}")
+                try:
+                    error_data = response.json()
+                    if "error" in error_data:
+                        st.error(f"Error: {error_data['error']}")
+                except:
+                    st.error("Please try again later.")
+        except requests.exceptions.ConnectionError:
+            st.error("❌ **Backend not available!** Please ensure the backend server is running on http://127.0.0.1:8000")
+            st.info("💡 Start the backend with: `./run_backend.sh`")
+        except requests.exceptions.Timeout:
+            st.error("⏱️ **Request timed out!** The LLM is taking longer than expected. Please try again or check if the backend is responsive.")
+        except Exception as e:
+            st.error(f"❌ **Error:** {str(e)}")
 

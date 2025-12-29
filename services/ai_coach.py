@@ -2,6 +2,7 @@
 import os
 import logging
 import sys
+import time
 from datetime import datetime
 from typing import Dict
 from langchain_core.prompts import ChatPromptTemplate
@@ -51,8 +52,9 @@ def get_eli_chat_model(temperature: float = 0.0, model_name: str = None):
     llm_mode = os.getenv("LLM_MODE", "auto").lower()
     
     # Get model name from environment or use default
+    # Note: Ollama uses colon (:) in model names, e.g., "qwen2.5:7b"
     if model_name is None:
-        model_name = os.getenv("LLM_MODEL", "qwen2.5-7b")
+        model_name = os.getenv("LLM_MODEL", "qwen2.5:7b")
     
     # Auto-detect mode based on base_url if not explicitly set
     if llm_mode == "auto":
@@ -100,7 +102,20 @@ def get_eli_chat_model(temperature: float = 0.0, model_name: str = None):
     logger.debug(f"API key present: {bool(api_key and api_key != 'Replace with your ELI API key')}")
     
     logger.info(f"Attempting to connect to LLM at: {base_url}")
-    logger.debug(f"Connection parameters: model={model_name}, temperature={temperature}, max_retries=2, ssl_verify={ssl_verify}")
+    
+    # Get max_tokens from environment (default: 2000 for local, None for remote)
+    # Limiting tokens significantly speeds up Ollama responses
+    max_tokens_env = os.getenv("LLM_MAX_TOKENS", "")
+    if llm_mode == "local":
+        # For local Ollama, use a reasonable default to speed up responses
+        # 2000 tokens ≈ 1500 words, which is sufficient for most training content
+        max_tokens = int(max_tokens_env) if max_tokens_env.isdigit() else 2000
+        logger.info(f"⚡ [SPEED] Using max_tokens={max_tokens} for faster Ollama responses")
+    else:
+        # For remote, allow None (unlimited) or use env var if set
+        max_tokens = int(max_tokens_env) if max_tokens_env.isdigit() else None
+    
+    logger.debug(f"Connection parameters: model={model_name}, temperature={temperature}, max_tokens={max_tokens}, max_retries=2, ssl_verify={ssl_verify}")
     
     # Create httpx client with SSL verification setting
     # This is needed for Windows machines with certificate issues
@@ -123,17 +138,24 @@ def get_eli_chat_model(temperature: float = 0.0, model_name: str = None):
     # http_client parameter is passed to control SSL verification
     try:
         logger.debug("Creating ChatOpenAI instance with latest API (api_key/base_url)")
+        logger.info(f"🔧 [CONFIG] Model: {model_name}")
+        logger.info(f"🔧 [CONFIG] Base URL: {base_url}")
+        logger.info(f"🔧 [CONFIG] Temperature: {temperature}")
+        logger.info(f"🔧 [CONFIG] Max tokens: {max_tokens} ({'limited' if max_tokens else 'unlimited'})")
+        logger.info(f"🔧 [CONFIG] Max retries: 2")
+        logger.info(f"🔧 [CONFIG] Timeout: None (no timeout)")
         llm = ChatOpenAI(
             model=model_name,
             temperature=temperature,
-            max_tokens=None,
+            max_tokens=max_tokens,  # Limit tokens for faster responses
             timeout=None,
             max_retries=2,
             api_key=api_key,
             base_url=base_url,
             **http_client_kwargs,  # Only includes http_client if SSL verification is disabled
         )
-        logger.info("LLM connection established successfully")
+        logger.info("✅ LLM connection established successfully")
+        logger.info("📡 [OLLAMA] Ready to accept requests")
     except Exception as e:
         logger.error(f"Failed to initialize LLM connection: {str(e)}")
         logger.exception("Full traceback:")
@@ -254,28 +276,39 @@ def retrieve_training_content(knowledge_base: str, level: str, topic: str = "") 
     # Enhanced query for comprehensive retrieval
     query = f"{knowledge_base} {level} training {topic} fundamentals concepts design details architecture commands ".strip()
     logger.info(f"Performing similarity search with query: {query[:100]}...")
-    logger.debug(f"Search parameters: k=10 (top 10 documents)")
+    
+    # Get k value from environment (default: 5 for speed, was 10)
+    # Reducing k reduces context size and speeds up LLM processing
+    k_value = int(os.getenv("FAISS_TOP_K", "5"))
+    logger.debug(f"Search parameters: k={k_value} (top {k_value} documents)")
+    logger.info(f"⚡ [SPEED] Using k={k_value} documents (set FAISS_TOP_K in .env to change)")
     
     try:
-        docs = vectorstore.similarity_search(query, k=10)  # Maximum relevant docs
+        docs = vectorstore.similarity_search(query, k=k_value)
         logger.info(f"Similarity search completed: found {len(docs)} documents")
     except Exception as e:
         logger.error(f"Error during similarity search: {str(e)}")
         logger.exception("Full traceback:")
         return f"❌ Error searching {knowledge_base}: {str(e)}"
     
+    # Limit document content length to reduce context size (speeds up LLM)
+    max_doc_chars = int(os.getenv("FAISS_MAX_DOC_CHARS", "3000"))  # Limit each doc to 3000 chars
+    logger.info(f"⚡ [SPEED] Limiting each document to {max_doc_chars} characters")
+    
     content = []
     for i, doc in enumerate(docs, 1):
         doc_source = Path(doc.metadata.get('source', 'N/A')).name
         doc_page = doc.metadata.get('page', 'N/A')
-        doc_length = len(doc.page_content)
-        logger.debug(f"Document {i}: source={doc_source}, page={doc_page}, length={doc_length} chars")
+        # Truncate long documents to reduce context size
+        doc_content = doc.page_content[:max_doc_chars]
+        doc_length = len(doc_content)
+        logger.debug(f"Document {i}: source={doc_source}, page={doc_page}, length={doc_length} chars (truncated if > {max_doc_chars})")
         
         content.append(
             f"=== 📄 DOCUMENT {i} ===\n"
             f"📁 Source: {doc_source}\n"
             f"📍 Page: {doc_page}\n"
-            f"📝 Extracted Content:\n{doc.page_content}\n{'='*80}"
+            f"📝 Extracted Content:\n{doc_content}\n{'='*80}"
         )
     
     result = "\n\n".join(content)
@@ -502,35 +535,27 @@ You are **Ericsson Senior Telecom Architect** specializing in {knowledge_base}.
 **{level_upper} LEVEL TRAINING ({level_depth} depth)**:
 {level_instructions}
 
-**EXACT REQUIRED STRUCTURE** (Content STRICTLY from documents):
+**EXACT REQUIRED STRUCTURE** (Content STRICTLY from documents - BE CONCISE):
 
 ## TRAINING OBJECTIVE (2 sentences)
 1. What learner masters from these documents
 2. Prerequisites mentioned in source materials
 
-### **1. FUNDAMENTALS EXPLAINED** (Minimum 250 words):
-Provide a detailed explanation of the basic concepts.
-- **Avoid bullet points**.
-- Use **full paragraphs** with clear, well-explained fundamentals.
+### **1. FUNDAMENTALS EXPLAINED** (150-200 words, concise):
+Provide a clear explanation of basic concepts using full paragraphs (avoid bullet points).
 
-### **2. CORE CONCEPTS** (Each concept requires 4+ sentences):
-Explain each core concept comprehensively:
-- Break down each concept and provide explanations for the learner to understand it fully.
+### **2. CORE CONCEPTS** (3-4 sentences per concept):
+Explain each core concept clearly and concisely.
 
-### **3. DETAILED ARCHITECTURE DIAGRAM** (Minimum 12 lines):
-Provide an ASCII diagram of the architecture:
-- Include **legend, data flow**, and **all components**.
-- Ensure the diagram is understandable and clearly conveys the structure.
+### **3. ARCHITECTURE DIAGRAM** (8-10 lines):
+Provide an ASCII diagram with legend, data flow, and key components.
 
-### **4. FURTHER RECOMMENDATIONS**:
-- Suggest **additional resources** for self-learning, practice exercises, or areas for improvement.
-- Provide a **learning path** for progressing to the next level.
+### **4. FURTHER RECOMMENDATIONS** (Brief):
+- Additional resources for self-learning
+- Learning path for next level
 
 ## **5. TECHNICAL REFERENCES**
-List exact references from **training documents**:
-Get heading of document and provide page number if possibe. Don't provide document number
-Don't hallucinate.
-
+List exact references from training documents (heading and page number if available). Don't hallucinate.
 
 **STRICT RULES**:
 • 100% FROM DOCUMENTS 
@@ -538,8 +563,9 @@ Don't hallucinate.
 • Clear, concise, technically accurate
 • Commands EXACTLY as in source
 • If info missing: "Not covered in provided documents"
+• Keep response concise and focused
 
-GENERATE LESSON:
+GENERATE LESSON (be concise):
     """)
     
         logger.info("Building prompt chain (prompt | LLM | StrOutputParser)")
@@ -565,11 +591,26 @@ GENERATE LESSON:
         logger.info("="*80)
         
         try:
-            logger.info("Invoking LLM chain...")
+            # Record start time
+            start_time = time.time()
+            logger.info("⏱️  [TIMING] Starting LLM invocation...")
+            logger.info(f"⏱️  [TIMING] Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            # Log that we're about to call Ollama
+            logger.info("📡 [OLLAMA] Sending request to Ollama API...")
+            logger.info("📡 [OLLAMA] Waiting for response (this may take 30-120 seconds)...")
+            
+            # Invoke the chain
             result = chain.invoke(prompt_vars)
+            
+            # Calculate elapsed time
+            elapsed_time = time.time() - start_time
             logger.info("="*80)
-            logger.info("LLM RESPONSE RECEIVED")
+            logger.info("✅ LLM RESPONSE RECEIVED")
+            logger.info(f"⏱️  [TIMING] Total time: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
+            logger.info(f"⏱️  [TIMING] End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             logger.info(f"  Response length: {len(result)} characters")
+            logger.info(f"  Response speed: {len(result)/elapsed_time:.1f} chars/second")
             logger.debug(f"  Response preview (first 200 chars): {result[:200]}...")
             logger.info("="*80)
             return result

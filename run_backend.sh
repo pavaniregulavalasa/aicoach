@@ -23,7 +23,7 @@ if [ ! -f ".env" ]; then
     echo "⚠️  .env file not found. Creating template..."
     echo "# LLM Configuration" > .env
     echo "LLM_MODE=local" >> .env
-    echo "LLM_MODEL=qwen2.5-7b" >> .env
+    echo "LLM_MODEL=qwen2.5:7b" >> .env
     echo "# For remote: LLM_MODE=remote, LLM_API_KEY=your-key, LLM_BASE_URL=your-url" >> .env
     echo "✅ Created .env file with defaults. Edit it if needed."
 fi
@@ -33,5 +33,5 @@ echo "📍 Backend will be available at: http://127.0.0.1:8000"
 echo "📚 API docs at: http://127.0.0.1:8000/docs"
 echo ""
 
-uvicorn services.main:app --host 127.0.0.1 --port 8000 --reload
+uvicorn services.main:app --host 127.0.0.1 --port 8000
 

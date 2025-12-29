@@ -1,5 +1,6 @@
 import logging
 import sys
+import time
 from datetime import datetime
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -62,33 +63,43 @@ class AssessmentRequest(BaseModel):
 @app.post("/training")
 async def training(request: TrainingRequest):
     """Generate training content based on level and knowledge base"""
+    request_start = time.time()
     logger.info("="*80)
-    logger.info(f"TRAINING REQUEST RECEIVED")
+    logger.info(f"🌐 [API] TRAINING REQUEST RECEIVED")
     logger.info(f"  Level: {request.level}")
     logger.info(f"  Knowledge Base: {request.knowledge_base}")
     logger.info(f"  Topic: {request.topic}")
+    logger.info(f"⏱️  [TIMING] Request received at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("="*80)
     
     try:
         logger.debug("Getting agent orchestrator")
         orchestrator = get_agent_orchestrator()
         
-        logger.info(f"Routing to training agent: level={request.level}, kb={request.knowledge_base}, topic={request.topic}")
+        logger.info(f"🔄 [API] Routing to training agent: level={request.level}, kb={request.knowledge_base}, topic={request.topic}")
+        routing_start = time.time()
         response = orchestrator.route_to_training_agent(
             request.level, 
             request.knowledge_base, 
             request.topic
         )
+        routing_elapsed = time.time() - routing_start
         
         if "error" in response:
-            logger.error(f"Training agent returned error: {response.get('error')}")
-            logger.error(f"Error message: {response.get('message', 'No message')}")
+            logger.error(f"❌ [API] Training agent returned error: {response.get('error')}")
+            logger.error(f"❌ [API] Error message: {response.get('message', 'No message')}")
         else:
-            logger.info("Training content generated successfully")
+            logger.info("✅ [API] Training content generated successfully")
             logger.debug(f"Response keys: {list(response.keys())}")
             if "training_content" in response:
                 content_length = len(response["training_content"])
-                logger.info(f"Training content length: {content_length} characters")
+                logger.info(f"📊 [API] Training content length: {content_length} characters")
+        
+        request_elapsed = time.time() - request_start
+        logger.info("="*80)
+        logger.info(f"⏱️  [TIMING] Total API request time: {request_elapsed:.2f} seconds ({request_elapsed/60:.2f} minutes)")
+        logger.info(f"⏱️  [TIMING] Agent processing time: {routing_elapsed:.2f} seconds")
+        logger.info("="*80)
         
         return response
     except FileNotFoundError as e:

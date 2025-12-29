@@ -1,4 +1,6 @@
 import logging
+import time
+from datetime import datetime
 from services.ai_coach import ComprehensiveTrainingCoach
 import services.ai_coach
 
@@ -41,25 +43,41 @@ class TrainingAgent:
             return {"error": "Invalid level. Please choose 'beginner', 'intermediate', 'advanced', or 'architecture'."}
 
     def generate_beginner_content(self,knowledge_base):
+        overall_start = time.time()
         logger.info("="*80)
-        logger.info("GENERATING BEGINNER CONTENT")
+        logger.info("🚀 GENERATING BEGINNER CONTENT")
         logger.info(f"  Knowledge Base: {knowledge_base}")
+        logger.info(f"⏱️  [TIMING] Overall start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("="*80)
         
         # Generate beginner-level training content
         try:
-            logger.info("Step 1: Retrieving training content from FAISS")
+            # Step 1: FAISS retrieval
+            step1_start = time.time()
+            logger.info("📚 [STEP 1] Retrieving training content from FAISS...")
             content = retrieve_training_content.invoke({
                     "knowledge_base": knowledge_base,
                     "level": "beginner"
                 })
-            logger.info(f"Retrieved content length: {len(content)} characters")
+            step1_elapsed = time.time() - step1_start
+            logger.info(f"✅ [STEP 1] Completed in {step1_elapsed:.2f} seconds")
+            logger.info(f"📊 [STEP 1] Retrieved content length: {len(content)} characters")
             
-            logger.info("Step 2: Generating comprehensive lesson via LLM")
+            # Step 2: LLM generation
+            step2_start = time.time()
+            logger.info("🤖 [STEP 2] Generating comprehensive lesson via LLM...")
+            logger.info("🤖 [STEP 2] This is the longest step - LLM generation can take 30-120 seconds...")
             lesson = self.comprehensive_coach.generate_comprehensive_lesson(knowledge_base, "beginner", content)
-            logger.info(f"Generated lesson length: {len(lesson)} characters")
+            step2_elapsed = time.time() - step2_start
+            logger.info(f"✅ [STEP 2] Completed in {step2_elapsed:.2f} seconds ({step2_elapsed/60:.2f} minutes)")
+            logger.info(f"📊 [STEP 2] Generated lesson length: {len(lesson)} characters")
             
-            logger.info("Beginner content generation completed successfully")
+            overall_elapsed = time.time() - overall_start
+            logger.info("="*80)
+            logger.info("✅ Beginner content generation completed successfully")
+            logger.info(f"⏱️  [TIMING] Total time: {overall_elapsed:.2f} seconds ({overall_elapsed/60:.2f} minutes)")
+            logger.info(f"⏱️  [TIMING] Breakdown - FAISS: {step1_elapsed:.2f}s, LLM: {step2_elapsed:.2f}s")
+            logger.info("="*80)
             return {
                 "training_content": lesson
             }
@@ -80,24 +98,40 @@ class TrainingAgent:
             }
 
     def generate_intermediate_content(self,knowledge_base):
+        overall_start = time.time()
         logger.info("="*80)
-        logger.info("GENERATING INTERMEDIATE CONTENT")
+        logger.info("🚀 GENERATING INTERMEDIATE CONTENT")
         logger.info(f"  Knowledge Base: {knowledge_base}")
+        logger.info(f"⏱️  [TIMING] Overall start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("="*80)
         
         try:
-            logger.info("Step 1: Retrieving training content from FAISS")
+            # Step 1: FAISS retrieval
+            step1_start = time.time()
+            logger.info("📚 [STEP 1] Retrieving training content from FAISS...")
             content = retrieve_training_content.invoke({
                     "knowledge_base": knowledge_base,
                     "level": "intermediate"
                 })
-            logger.info(f"Retrieved content length: {len(content)} characters")
+            step1_elapsed = time.time() - step1_start
+            logger.info(f"✅ [STEP 1] Completed in {step1_elapsed:.2f} seconds")
+            logger.info(f"📊 [STEP 1] Retrieved content length: {len(content)} characters")
             
-            logger.info("Step 2: Generating comprehensive lesson via LLM")
+            # Step 2: LLM generation
+            step2_start = time.time()
+            logger.info("🤖 [STEP 2] Generating comprehensive lesson via LLM...")
+            logger.info("🤖 [STEP 2] This is the longest step - LLM generation can take 30-120 seconds...")
             lesson = self.comprehensive_coach.generate_comprehensive_lesson(knowledge_base, "intermediate", content)
-            logger.info(f"Generated lesson length: {len(lesson)} characters")
+            step2_elapsed = time.time() - step2_start
+            logger.info(f"✅ [STEP 2] Completed in {step2_elapsed:.2f} seconds ({step2_elapsed/60:.2f} minutes)")
+            logger.info(f"📊 [STEP 2] Generated lesson length: {len(lesson)} characters")
             
-            logger.info("Intermediate content generation completed successfully")
+            overall_elapsed = time.time() - overall_start
+            logger.info("="*80)
+            logger.info("✅ Intermediate content generation completed successfully")
+            logger.info(f"⏱️  [TIMING] Total time: {overall_elapsed:.2f} seconds ({overall_elapsed/60:.2f} minutes)")
+            logger.info(f"⏱️  [TIMING] Breakdown - FAISS: {step1_elapsed:.2f}s, LLM: {step2_elapsed:.2f}s")
+            logger.info("="*80)
             return {
                 "training_content": lesson
             }
@@ -118,24 +152,40 @@ class TrainingAgent:
             }
 
     def generate_advanced_content(self,knowledge_base):
+        overall_start = time.time()
         logger.info("="*80)
-        logger.info("GENERATING ADVANCED CONTENT")
+        logger.info("🚀 GENERATING ADVANCED CONTENT")
         logger.info(f"  Knowledge Base: {knowledge_base}")
+        logger.info(f"⏱️  [TIMING] Overall start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("="*80)
         
         try:
-            logger.info("Step 1: Retrieving training content from FAISS")
+            # Step 1: FAISS retrieval
+            step1_start = time.time()
+            logger.info("📚 [STEP 1] Retrieving training content from FAISS...")
             content = retrieve_training_content.invoke({
                     "knowledge_base": knowledge_base,
                     "level": "advanced"
                 })
-            logger.info(f"Retrieved content length: {len(content)} characters")
+            step1_elapsed = time.time() - step1_start
+            logger.info(f"✅ [STEP 1] Completed in {step1_elapsed:.2f} seconds")
+            logger.info(f"📊 [STEP 1] Retrieved content length: {len(content)} characters")
             
-            logger.info("Step 2: Generating comprehensive lesson via LLM")
+            # Step 2: LLM generation
+            step2_start = time.time()
+            logger.info("🤖 [STEP 2] Generating comprehensive lesson via LLM...")
+            logger.info("🤖 [STEP 2] This is the longest step - LLM generation can take 30-120 seconds...")
             lesson = self.comprehensive_coach.generate_comprehensive_lesson(knowledge_base, "advanced", content)
-            logger.info(f"Generated lesson length: {len(lesson)} characters")
+            step2_elapsed = time.time() - step2_start
+            logger.info(f"✅ [STEP 2] Completed in {step2_elapsed:.2f} seconds ({step2_elapsed/60:.2f} minutes)")
+            logger.info(f"📊 [STEP 2] Generated lesson length: {len(lesson)} characters")
             
-            logger.info("Advanced content generation completed successfully")
+            overall_elapsed = time.time() - overall_start
+            logger.info("="*80)
+            logger.info("✅ Advanced content generation completed successfully")
+            logger.info(f"⏱️  [TIMING] Total time: {overall_elapsed:.2f} seconds ({overall_elapsed/60:.2f} minutes)")
+            logger.info(f"⏱️  [TIMING] Breakdown - FAISS: {step1_elapsed:.2f}s, LLM: {step2_elapsed:.2f}s")
+            logger.info("="*80)
             return {
                 "training_content": lesson
             }
@@ -156,24 +206,40 @@ class TrainingAgent:
             }
 
     def generate_architecture_content(self, knowledge_base):
+        overall_start = time.time()
         logger.info("="*80)
-        logger.info("GENERATING ARCHITECTURE CONTENT")
+        logger.info("🚀 GENERATING ARCHITECTURE CONTENT")
         logger.info(f"  Knowledge Base: {knowledge_base}")
+        logger.info(f"⏱️  [TIMING] Overall start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("="*80)
         
         try:
-            logger.info("Step 1: Retrieving training content from FAISS")
+            # Step 1: FAISS retrieval
+            step1_start = time.time()
+            logger.info("📚 [STEP 1] Retrieving training content from FAISS...")
             content = retrieve_training_content.invoke({
                     "knowledge_base": knowledge_base,
                     "level": "architecture"
                 })
-            logger.info(f"Retrieved content length: {len(content)} characters")
+            step1_elapsed = time.time() - step1_start
+            logger.info(f"✅ [STEP 1] Completed in {step1_elapsed:.2f} seconds")
+            logger.info(f"📊 [STEP 1] Retrieved content length: {len(content)} characters")
             
-            logger.info("Step 2: Generating comprehensive lesson via LLM")
+            # Step 2: LLM generation
+            step2_start = time.time()
+            logger.info("🤖 [STEP 2] Generating comprehensive lesson via LLM...")
+            logger.info("🤖 [STEP 2] This is the longest step - LLM generation can take 30-120 seconds...")
             lesson = self.comprehensive_coach.generate_comprehensive_lesson(knowledge_base, "architecture", content)
-            logger.info(f"Generated lesson length: {len(lesson)} characters")
+            step2_elapsed = time.time() - step2_start
+            logger.info(f"✅ [STEP 2] Completed in {step2_elapsed:.2f} seconds ({step2_elapsed/60:.2f} minutes)")
+            logger.info(f"📊 [STEP 2] Generated lesson length: {len(lesson)} characters")
             
-            logger.info("Architecture content generation completed successfully")
+            overall_elapsed = time.time() - overall_start
+            logger.info("="*80)
+            logger.info("✅ Architecture content generation completed successfully")
+            logger.info(f"⏱️  [TIMING] Total time: {overall_elapsed:.2f} seconds ({overall_elapsed/60:.2f} minutes)")
+            logger.info(f"⏱️  [TIMING] Breakdown - FAISS: {step1_elapsed:.2f}s, LLM: {step2_elapsed:.2f}s")
+            logger.info("="*80)
             return {
                 "training_content": lesson
             }
