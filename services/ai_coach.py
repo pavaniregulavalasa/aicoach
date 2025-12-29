@@ -43,31 +43,61 @@ EMBEDDINGS = HuggingFaceBgeEmbeddings(
             model_kwargs={"device": "cpu", "trust_remote_code": True},
             encode_kwargs={"normalize_embeddings": True},#True enabling Semantic search
     )
-def get_eli_chat_model(temperature: float = 0.0, model_name: str = "qwen2.5-7b"):
+def get_eli_chat_model(temperature: float = 0.0, model_name: str = None):
     logger.info("="*80)
     logger.info("INITIALIZING LLM CONNECTION")
+    
+    # Get LLM mode: "local" for Ollama, "remote" for ELI gateway (default: auto-detect)
+    llm_mode = os.getenv("LLM_MODE", "auto").lower()
+    
+    # Get model name from environment or use default
+    if model_name is None:
+        model_name = os.getenv("LLM_MODEL", "qwen2.5-7b")
+    
+    # Auto-detect mode based on base_url if not explicitly set
+    if llm_mode == "auto":
+        base_url = os.getenv("LLM_BASE_URL", os.getenv("ELI_BASE_URL", ""))
+        if "localhost" in base_url or "127.0.0.1" in base_url or base_url == "":
+            llm_mode = "local"
+        else:
+            llm_mode = "remote"
+    
+    logger.info(f"  Mode: {llm_mode.upper()}")
     logger.info(f"  Model: {model_name}")
     logger.info(f"  Temperature: {temperature}")
     logger.info("="*80)
     
-    # Get API key and base URL from environment variables
-    api_key = os.getenv("ELI_API_KEY", "Replace with your ELI API key")
-    base_url = os.getenv("ELI_BASE_URL", "http://localhost:11434/v1")
+    # Configure based on mode
+    if llm_mode == "local":
+        # Local Ollama configuration - skip all validations
+        base_url = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
+        api_key = os.getenv("LLM_API_KEY", "ollama")  # Ollama doesn't require real API key - any value works
+        ssl_verify = False  # Local HTTP connections don't need SSL verification
+        logger.info("Using LOCAL Ollama instance")
+        logger.debug(f"Ollama base URL: {base_url}")
+        logger.debug("Skipping API key and SSL validations for local mode")
+    else:
+        # Remote ELI gateway configuration - full validations
+        base_url = os.getenv("LLM_BASE_URL", os.getenv("ELI_BASE_URL", ""))
+        api_key = os.getenv("LLM_API_KEY", os.getenv("ELI_API_KEY", ""))
+        
+        # Get SSL verification setting (default: True, set to "false" or "0" to disable)
+        ssl_verify_str = os.getenv("LLM_SSL_VERIFY", os.getenv("ELI_SSL_VERIFY", "true")).lower()
+        ssl_verify = ssl_verify_str not in ("false", "0", "no", "off")
+        
+        logger.info("Using REMOTE ELI gateway")
+        logger.debug(f"ELI base URL: {base_url}")
+        logger.debug(f"SSL verification: {ssl_verify}")
+        
+        # Validate required fields for remote mode only
+        if not api_key or api_key == "" or api_key == "Replace with your ELI API key":
+            logger.error("LLM_API_KEY or ELI_API_KEY not found in environment variables")
+            raise ValueError("LLM_API_KEY or ELI_API_KEY not found in environment variables. Please set it in .env file.")
+        if not base_url or base_url == "":
+            logger.error("LLM_BASE_URL or ELI_BASE_URL not found in environment variables")
+            raise ValueError("LLM_BASE_URL or ELI_BASE_URL not found in environment variables. Please set it in .env file.")
     
-    # Get SSL verification setting (default: True, set to "false" or "0" to disable)
-    ssl_verify_str = os.getenv("ELI_SSL_VERIFY", "true").lower()
-    ssl_verify = ssl_verify_str not in ("false", "0", "no", "off")
-    
-    logger.debug(f"Retrieved ELI_BASE_URL: {base_url}")
     logger.debug(f"API key present: {bool(api_key and api_key != 'Replace with your ELI API key')}")
-    logger.debug(f"SSL verification: {ssl_verify}")
-    
-    if not api_key or api_key == "":
-        logger.error("ELI_API_KEY not found in environment variables")
-        raise ValueError("ELI_API_KEY not found in environment variables. Please set it in .env file.")
-    if not base_url or base_url == "":
-        logger.error("ELI_BASE_URL not found in environment variables")
-        raise ValueError("ELI_BASE_URL not found in environment variables. Please set it in .env file.")
     
     logger.info(f"Attempting to connect to LLM at: {base_url}")
     logger.debug(f"Connection parameters: model={model_name}, temperature={temperature}, max_retries=2, ssl_verify={ssl_verify}")
@@ -78,7 +108,10 @@ def get_eli_chat_model(temperature: float = 0.0, model_name: str = "qwen2.5-7b")
     # Note: ChatOpenAI accepts http_client parameter directly in v0.2.0+
     http_client_kwargs = {}
     if not ssl_verify:
-        logger.warning("SSL certificate verification is DISABLED - use only in trusted/internal networks!")
+        if llm_mode == "local":
+            logger.debug("Creating HTTP client for local Ollama (no SSL verification needed)")
+        else:
+            logger.warning("SSL certificate verification is DISABLED - use only in trusted/internal networks!")
         # Create httpx client with SSL verification disabled
         http_client = httpx.Client(verify=False, timeout=None)
         # Pass http_client to ChatOpenAI - it will use it for the underlying OpenAI client

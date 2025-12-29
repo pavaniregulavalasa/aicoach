@@ -65,18 +65,48 @@ code .env
 vim .env
 ```
 
-**Required variables in `.env`**:
+**Required variables in `.env`** (choose one mode):
+
+### Option 1: Local Ollama (Recommended for Development)
 ```bash
-ELI_API_KEY=your-eli-api-key-here
-ELI_BASE_URL=https://gateway.eli.gaia.gic.ericsson.se/api/openai/v1
+# Set mode to local
+LLM_MODE=local
+
+# Optional: Customize Ollama URL (default: http://localhost:11434/v1)
+LLM_BASE_URL=http://localhost:11434/v1
+
+# Optional: Model name (default: qwen2.5-7b)
+LLM_MODEL=qwen2.5-7b
 ```
 
-**Optional variables** (for Windows/SSL certificate issues):
+### Option 2: Remote ELI Gateway (Production)
 ```bash
+# Set mode to remote
+LLM_MODE=remote
+
+# Required for remote
+LLM_API_KEY=your-eli-api-key-here
+LLM_BASE_URL=https://gateway.eli.gaia.gic.ericsson.se/api/openai/v1
+
+# Optional: Model name (default: qwen2.5-7b)
+LLM_MODEL=qwen2.5-7b
+
+# Optional: SSL verification (for Windows/SSL certificate issues)
 # Set to "false" to disable SSL certificate verification
 # WARNING: Only use in trusted/internal networks!
+LLM_SSL_VERIFY=false
+```
+
+### Option 3: Auto-detect (Backward Compatible)
+```bash
+# Auto-detects based on base URL (localhost = local, otherwise remote)
+# Uses legacy ELI_* variables for backward compatibility
+ELI_API_KEY=your-eli-api-key-here
+ELI_BASE_URL=https://gateway.eli.gaia.gic.ericsson.se/api/openai/v1
 ELI_SSL_VERIFY=false
 ```
+
+**Note**: `LLM_MODE=auto` will automatically detect local vs remote based on the base URL.
 
 **Security Note**: Never commit `.env` file to git! It's already in `.gitignore`.
 
