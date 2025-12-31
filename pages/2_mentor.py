@@ -25,6 +25,28 @@ if st.button("Ask Mentor"):
                     elif "mentor_response" in data:
                         st.subheader("👩‍💻 Mentor Response")
                         st.markdown(data["mentor_response"])
+                        
+                        # Track progress if user is logged in
+                        if "username" in st.session_state and st.session_state.username:
+                            try:
+                                progress_payload = {
+                                    "username": st.session_state.username,
+                                    "activity_type": "mentor",
+                                    "activity_data": {
+                                        "query": user_query[:100],  # Store first 100 chars
+                                        "context": "training"
+                                    }
+                                }
+                                progress_response = requests.post(
+                                    "http://127.0.0.1:8000/user/progress/update",
+                                    json=progress_payload,
+                                    timeout=5
+                                )
+                                if progress_response.status_code == 200:
+                                    st.success("✅ Query saved to your profile!")
+                            except Exception as e:
+                                # Don't show error to user, just log silently
+                                pass
                     else:
                         st.warning("Unexpected response format from server.")
                 else:

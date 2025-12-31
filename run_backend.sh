@@ -33,5 +33,5 @@ echo "📍 Backend will be available at: http://127.0.0.1:8000"
 echo "📚 API docs at: http://127.0.0.1:8000/docs"
 echo ""
 
-uvicorn services.main:app --host 127.0.0.1 --port 8000
+uvicorn services.main:app --host 127.0.0.1 --port 8000 --reload
 

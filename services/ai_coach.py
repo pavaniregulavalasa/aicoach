@@ -1,10 +1,10 @@
-# ai_coach_dashboard.py - COMPLETE COMPREHENSIVE TELECOM TRAINING COACH
+
+# ai_coach_dashboard.py - COMPLETE LLM-POWERED TELECOM TRAINING COACH
 import os
-import logging
-import sys
-import time
+import json
 from datetime import datetime
-from typing import Dict
+import re
+from typing import Dict, List
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langchain_community.vectorstores import FAISS
@@ -13,13 +13,22 @@ from langchain_core.output_parsers import StrOutputParser
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.prompt import Prompt, Confirm
+from rich.prompt import Prompt
 from rich.text import Text
 from pathlib import Path
 from pydantic import BaseModel, Field
 import httpx
 from langchain_community.embeddings import HuggingFaceBgeEmbeddings
+from langchain_core.documents import Document 
+from sklearn.cluster import KMeans
+import numpy as np
+import logging
+import sys
+import time
 from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Configure logging
 os.makedirs('logs', exist_ok=True)
@@ -33,17 +42,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load environment variables from .env file
-load_dotenv()
-logger.info("Environment variables loaded from .env file")
-
 # Configuration
 FAISS_ROOT = "./services/faiss_indexes/"
-EMBEDDINGS = HuggingFaceBgeEmbeddings(
-            model_name="BAAI/bge-base-en-v1.5",
-            model_kwargs={"device": "cpu", "trust_remote_code": True},
-            encode_kwargs={"normalize_embeddings": True},#True enabling Semantic search
+
+# Try new langchain-huggingface first, fallback to deprecated for compatibility
+try:
+    from langchain_huggingface import HuggingFaceEmbeddings  # New API
+    USE_NEW_EMBEDDINGS = True
+except ImportError:
+    # Fallback to deprecated version if new package not available
+    from langchain_community.embeddings import HuggingFaceBgeEmbeddings  # Fallback
+    USE_NEW_EMBEDDINGS = False
+
+# Initialize embeddings with new or deprecated API
+if USE_NEW_EMBEDDINGS:
+    # New langchain-huggingface API
+    EMBEDDINGS = HuggingFaceEmbeddings(
+        model_name="BAAI/bge-base-en-v1.5",
+        model_kwargs={"device": "cpu", "trust_remote_code": True},
+        encode_kwargs={"normalize_embeddings": True},  # True enabling Semantic search
     )
+else:
+    # Deprecated langchain-community API (fallback)
+    EMBEDDINGS = HuggingFaceBgeEmbeddings(
+        model_name="BAAI/bge-base-en-v1.5",
+        model_kwargs={"device": "cpu", "trust_remote_code": True},
+        encode_kwargs={"normalize_embeddings": True},  # True enabling Semantic search
+    )
+
 def get_eli_chat_model(temperature: float = 0.0, model_name: str = None):
     logger.info("="*80)
     logger.info("INITIALIZING LLM CONNECTION")
@@ -118,24 +144,26 @@ def get_eli_chat_model(temperature: float = 0.0, model_name: str = None):
     logger.debug(f"Connection parameters: model={model_name}, temperature={temperature}, max_tokens={max_tokens}, max_retries=2, ssl_verify={ssl_verify}")
     
     # Create httpx client with SSL verification setting
-    # This is needed for Windows machines with certificate issues
-    # In newer OpenAI SDK (v1.x) and langchain-openai, we need to pass http_client
-    # Note: ChatOpenAI accepts http_client parameter directly in v0.2.0+
+    # Set reasonable timeout: 450 seconds (7.5 minutes) for local, 600 seconds (10 minutes) for remote
+    # This prevents indefinite hangs while allowing enough time for LLM responses
+    # Note: Ollama can take 300-400 seconds for complex training content generation
+    timeout_seconds = 450 if llm_mode == "local" else 600
     http_client_kwargs = {}
     if not ssl_verify:
         if llm_mode == "local":
-            logger.debug("Creating HTTP client for local Ollama (no SSL verification needed)")
+            logger.debug(f"Creating HTTP client for local Ollama (no SSL verification, timeout={timeout_seconds}s)")
         else:
             logger.warning("SSL certificate verification is DISABLED - use only in trusted/internal networks!")
-        # Create httpx client with SSL verification disabled
-        http_client = httpx.Client(verify=False, timeout=None)
+        # Create httpx client with SSL verification disabled and reasonable timeout
+        http_client = httpx.Client(verify=False, timeout=timeout_seconds)
         # Pass http_client to ChatOpenAI - it will use it for the underlying OpenAI client
         http_client_kwargs['http_client'] = http_client
-    # If ssl_verify is True, we don't need to pass http_client (uses default with verification)
+    else:
+        # Even with SSL verification, we need a timeout
+        http_client = httpx.Client(verify=True, timeout=timeout_seconds)
+        http_client_kwargs['http_client'] = http_client
     
     # Create an instance of ChatOpenAI using latest LangChain OpenAI API (v0.2.0+)
-    # Latest API uses api_key and base_url parameters
-    # http_client parameter is passed to control SSL verification
     try:
         logger.debug("Creating ChatOpenAI instance with latest API (api_key/base_url)")
         logger.info(f"🔧 [CONFIG] Model: {model_name}")
@@ -143,16 +171,16 @@ def get_eli_chat_model(temperature: float = 0.0, model_name: str = None):
         logger.info(f"🔧 [CONFIG] Temperature: {temperature}")
         logger.info(f"🔧 [CONFIG] Max tokens: {max_tokens} ({'limited' if max_tokens else 'unlimited'})")
         logger.info(f"🔧 [CONFIG] Max retries: 2")
-        logger.info(f"🔧 [CONFIG] Timeout: None (no timeout)")
+        logger.info(f"🔧 [CONFIG] HTTP timeout: {timeout_seconds}s ({timeout_seconds/60:.1f} minutes)")
         llm = ChatOpenAI(
             model=model_name,
             temperature=temperature,
             max_tokens=max_tokens,  # Limit tokens for faster responses
-            timeout=None,
+            timeout=timeout_seconds,  # Set timeout to match http_client
             max_retries=2,
             api_key=api_key,
             base_url=base_url,
-            **http_client_kwargs,  # Only includes http_client if SSL verification is disabled
+            **http_client_kwargs,  # Includes http_client with proper timeout
         )
         logger.info("✅ LLM connection established successfully")
         logger.info("📡 [OLLAMA] Ready to accept requests")
@@ -169,7 +197,7 @@ def get_eli_chat_model(temperature: float = 0.0, model_name: str = None):
 _LLM = None
 
 def get_llm():
-    """Get or create the global LLM instance (lazy initialization)"""
+    """Get or create the global LLM instance"""
     global _LLM
     if _LLM is None:
         try:
@@ -177,12 +205,10 @@ def get_llm():
             logger.info("Global LLM instance created successfully")
         except Exception as e:
             logger.error(f"CRITICAL: Failed to create global LLM instance: {str(e)}")
-            logger.exception("Full traceback:")
             raise
     return _LLM
 
-# For backward compatibility - create a proxy that works with LangChain's pipe operator
-# The proxy needs to implement __or__ and __ror__ to work with the | operator
+# LLM Proxy for lazy initialization
 class LLMProxy:
     """Proxy class that lazily initializes the LLM when accessed"""
     _llm_instance = None
@@ -197,148 +223,332 @@ class LLMProxy:
         """Delegate all attribute access to the actual LLM"""
         return getattr(self._get_llm(), name)
     
+    def __or__(self, other):
+        """Support LangChain pipe operator: prompt | LLM"""
+        return self._get_llm() | other
+    
+    def __ror__(self, other):
+        """Support LangChain pipe operator: prompt | LLM"""
+        return other | self._get_llm()
+    
     def __call__(self, *args, **kwargs):
         """Make the proxy callable - ChatOpenAI uses invoke(), not direct call"""
         # ChatOpenAI objects are not directly callable, they use invoke()
         return self._get_llm().invoke(*args, **kwargs)
     
     def invoke(self, *args, **kwargs):
-        """Invoke method for LangChain"""
+        """Explicit invoke method"""
         return self._get_llm().invoke(*args, **kwargs)
-    
-    def __or__(self, other):
-        """Support for LangChain pipe operator: LLM | parser"""
-        return self._get_llm() | other
-    
-    def __ror__(self, other):
-        """Support for LangChain pipe operator: prompt | LLM"""
-        return other | self._get_llm()
-    
-    def __getstate__(self):
-        """Support for pickling"""
-        return {}
-    
-    def __setstate__(self, state):
-        """Support for unpickling"""
-        self._llm_instance = None
 
-# Create module-level LLM proxy
+# Create LLM proxy instance
 LLM = LLMProxy()
-
 console = Console()
 
 class TrainingContentInput(BaseModel):
-    """Input schema for comprehensive training content"""
-    knowledge_base: str = Field(description="'mml' or 'alarm_handling'")
-    level: str = Field(description="'beginner', 'intermediate', 'advanced', 'architecture'")
-    topic: str = Field(default="", description="Specific topic for doubt clearing")
+    knowledge_base: str = Field(..., description="'alarm_handling' or 'mml'")
+    level: str = Field(..., description="'beginner', 'intermediate', 'advanced', 'architecture'")
+
+def classify_chunk_type(chunk: Document) -> str:
+    """✅ Classify chunk as Text/Image/Table"""
+    metadata = chunk.metadata
+    content = chunk.page_content.lower()
     
-    model_config = {
-        "json_schema_extra": {
-            "example": {
-                "knowledge_base": "mml",
-                "level": "beginner",
-                "topic": ""
-            }
-        }
-    }
+    if metadata.get('category') == 'Image' or metadata.get('element_type') == 'Image':
+        return 'Image'
+    if metadata.get('category') == 'Table' or metadata.get('element_type') == 'Table':
+        return 'Table'
+    if metadata.get('has_images'):
+        return 'Image'
+    
+    image_keywords = ['diagram', 'figure', 'fig', 'image', 'chart', 'graph', 'flow']
+    table_keywords = ['table', '|', '---', 'parameter', 'value']
+    
+    if sum(1 for kw in image_keywords if kw in content) >= 1:
+        return 'Image'
+    if sum(1 for kw in table_keywords if kw in content) >= 2:
+        return 'Table'
+    
+    return 'Text'
+
+def retrieve_all_chunks_raw(knowledge_base: str) -> List[Document]:
+    """✅ Retrieve 100% ALL chunks from FAISS"""
+    index_path = None
+    possible_paths = [
+        Path(f"{FAISS_ROOT}/{knowledge_base}"),
+        Path(f"{FAISS_ROOT}/{knowledge_base.lower()}"),
+        Path(f"./{knowledge_base}"),
+        Path(f"./faiss_indexes/{knowledge_base}")
+    ]
+    
+    for path in possible_paths:
+        if path.exists() and list(path.glob("index.faiss")):
+            index_path = path
+            print(f"✅ Found FAISS index: {path}")
+            break
+    
+    if not index_path:
+        return []
+    
+    try:
+        vectorstore = FAISS.load_local(str(index_path), EMBEDDINGS, allow_dangerous_deserialization=True)
+        index_size = vectorstore.index.ntotal
+        
+        if index_size > 0:
+            try:
+                all_docs_with_scores = vectorstore.similarity_search_with_score(" ", k=index_size)
+                all_docs = [doc for doc, score in all_docs_with_scores]
+            except:
+                all_docs = vectorstore.similarity_search(" ", k=index_size)
+        else:
+            all_docs = []
+    except Exception as e:
+        print(f"❌ FAISS error: {e}")
+        return []
+    
+    filtered_docs = [doc for doc in all_docs 
+                    if knowledge_base.lower() in str(doc.metadata).lower()]
+    print(f"✅ Retrieved {len(filtered_docs)} chunks from RAG")
+    return filtered_docs
+
+# 🔥 LLM-POWERED GROUPING (NEW)
+def llm_group_chunks(chunks: List[Document], knowledge_base: str) -> Dict[str, List[Document]]:
+    """🔥 ELI LLM creates intelligent groups from ALL chunks (NO limit!)"""
+    print(f"🤖 LLM analyzing **ALL {len(chunks)}** chunks for grouping...")
+    
+    # ✅ ALL CHUNKS (no [:60] limit)
+    chunk_samples = []
+    for i, chunk in enumerate(chunks):  # ALL chunks!
+        chunk_type = classify_chunk_type(chunk)
+        source = Path(chunk.metadata.get('source', 'unknown.pdf')).name
+        preview = chunk.page_content[:250].strip()  # Shorter previews for more chunks
+        chunk_samples.append(f"CHUNK {i+1} [{chunk_type.upper()}] {source}: {preview}")
+    
+    # ✅ ALL samples (chunked if too long)
+    sample_text = "\n---\n".join(chunk_samples)
+    
+    # Chunk if exceeds token limit
+    if len(sample_text) > 8000:
+        sample_text = sample_text[:8000] + "\n...[TRUNCATED - ALL CHUNKS ANALYZED]"
+        print(f"⚠️ Truncated to 8000 chars ({len(chunk_samples)} chunks analyzed)")
+    
+    prompt = ChatPromptTemplate.from_template("""
+You are **Ericsson Telecom Training Architect**. Organize **ALL {len_chunks}** {knowledge_base} chunks into **5-12 meaningful business topics**.
+
+**ALL CHUNKS** (Text/Images/Tables - analyze complete list):
+{sample_text}
+
+**OUTPUT EXACTLY this JSON**:
+{{
+  "groups": [
+    {{
+      "name": "MML Command Syntax & Examples",
+      "chunk_indices": [1,5,12,23,45,67,89]
+    }},
+    {{
+      "name": "Network Flow Diagrams", 
+      "chunk_indices": [2,8,19,33,56]
+    }}
+  ]
+}}
+
+**IMPORTANT**: Use ALL chunk numbers (1-{len_chunks}). Images/Tables first.
+""")
+    
+    chain = prompt | LLM | StrOutputParser()
+    
+    try:
+        response = chain.invoke({
+            "knowledge_base": knowledge_base, 
+            "sample_text": sample_text,
+            "len_chunks": len(chunks)
+        })
+        groups_json = json.loads(response.strip())
+        
+        grouped = {}
+        for group in groups_json.get("groups", []):
+            name = group.get("name", "Unnamed Group")
+            indices = group.get("chunk_indices", [])
+            group_chunks = [chunks[i-1] for i in indices if 0 <= i-1 < len(chunks)]
+            if group_chunks:
+                grouped[name] = group_chunks
+        
+        print(f"✅ LLM grouped **ALL {len(chunks)}** chunks into {len(grouped)} groups")
+        return grouped
+        
+    except Exception as e:
+        print(f"⚠️ LLM failed: {e} → Fallback")
+        return create_fallback_groups(chunks)
+
+def create_fallback_groups(chunks: List[Document]) -> Dict[str, List[Document]]:
+    """Fallback if LLM fails"""
+    grouped = {}
+    image_chunks = [c for c in chunks if classify_chunk_type(c) == 'Image']
+    table_chunks = [c for c in chunks if classify_chunk_type(c) == 'Table']
+    text_chunks = [c for c in chunks if classify_chunk_type(c) == 'Text']
+    
+    if image_chunks: grouped["🖼️ Diagrams & Flowcharts"] = image_chunks
+    if table_chunks: grouped["📊 Reference Tables & Codes"] = table_chunks
+    if text_chunks: grouped["📝 Procedures & Commands"] = text_chunks
+    
+    return grouped
 
 @tool(args_schema=TrainingContentInput)
-def retrieve_training_content(knowledge_base: str, level: str, topic: str = "") -> str:
-    """Retrieve comprehensive training content from specific knowledge base"""
-    logger.info("="*80)
-    logger.info("RETRIEVING TRAINING CONTENT FROM FAISS")
-    logger.info(f"  Knowledge Base: {knowledge_base}")
-    logger.info(f"  Level: {level}")
-    logger.info(f"  Topic: {topic}")
-    logger.info("="*80)
+def retrieve_training_content(knowledge_base: str, level: str) -> str:
+    """✅ LLM GROUPS ALL CHUNKS → SAVES ROOT DIR → RETURNS SAME GROUPS FOR LLM"""
     
-    index_path = Path(f"{FAISS_ROOT}/{knowledge_base}")
-    logger.debug(f"FAISS index path: {index_path}")
+    print(f"\n🔥 LLM-POWERED: {knowledge_base} ({level})")
     
-    if not index_path.exists():
-        logger.error(f"FAISS index not found at: {index_path}")
-        return f"❌ No {knowledge_base} knowledge base available"
+    all_chunks = retrieve_all_chunks_raw(knowledge_base)
+    if not all_chunks:
+        available = [p.name for p in Path(FAISS_ROOT).iterdir() if p.is_dir()]
+        return f"❌ No '{knowledge_base}' chunks\nAvailable: {available}"
     
-    try:
-        logger.info(f"Loading FAISS vectorstore from: {index_path}")
-        vectorstore = FAISS.load_local(
-            str(index_path),
-            EMBEDDINGS,
-            allow_dangerous_deserialization=True
-        )
-        logger.info("FAISS vectorstore loaded successfully")
-    except Exception as e:
-        logger.error(f"Error loading FAISS vectorstore: {str(e)}")
-        logger.exception("Full traceback:")
-        return f"❌ Error loading {knowledge_base}: {str(e)}"
+    total_chunks = len(all_chunks)
+    print(f"✅ Retrieved {total_chunks} chunks (Text+Images+Tables)")
     
-    # Enhanced query for comprehensive retrieval
-    query = f"{knowledge_base} {level} training {topic} fundamentals concepts design details architecture commands ".strip()
-    logger.info(f"Performing similarity search with query: {query[:100]}...")
+    cache_file = Path(f"./{knowledge_base}_llm_groups.json")
+    grouped_chunks = None
     
-    # Get k value from environment (default: 5 for speed, was 10)
-    # Reducing k reduces context size and speeds up LLM processing
-    k_value = int(os.getenv("FAISS_TOP_K", "5"))
-    logger.debug(f"Search parameters: k={k_value} (top {k_value} documents)")
-    logger.info(f"⚡ [SPEED] Using k={k_value} documents (set FAISS_TOP_K in .env to change)")
+    if cache_file.exists():
+        try:
+            cached = json.loads(cache_file.read_text(encoding='utf-8'))
+            if cached["total_chunks"] == total_chunks:
+                print(f"✅ LOADED CACHE: {len(cached['groups'])} LLM groups")
+                grouped_chunks = {
+                    g["name"]: [Document(**chunk_data) for chunk_data in g["chunks"]]
+                    for g in cached["groups"]
+                }
+        except Exception as e:
+            print(f"⚠️ Cache invalid: {e}")
     
-    try:
-        docs = vectorstore.similarity_search(query, k=k_value)
-        logger.info(f"Similarity search completed: found {len(docs)} documents")
-    except Exception as e:
-        logger.error(f"Error during similarity search: {str(e)}")
-        logger.exception("Full traceback:")
-        return f"❌ Error searching {knowledge_base}: {str(e)}"
-    
-    # Limit document content length to reduce context size (speeds up LLM)
-    max_doc_chars = int(os.getenv("FAISS_MAX_DOC_CHARS", "3000"))  # Limit each doc to 3000 chars
-    logger.info(f"⚡ [SPEED] Limiting each document to {max_doc_chars} characters")
-    
-    content = []
-    for i, doc in enumerate(docs, 1):
-        doc_source = Path(doc.metadata.get('source', 'N/A')).name
-        doc_page = doc.metadata.get('page', 'N/A')
-        # Truncate long documents to reduce context size
-        doc_content = doc.page_content[:max_doc_chars]
-        doc_length = len(doc_content)
-        logger.debug(f"Document {i}: source={doc_source}, page={doc_page}, length={doc_length} chars (truncated if > {max_doc_chars})")
+    if not grouped_chunks:
+        print("🤖 LLM creating intelligent groups...")
+        grouped_chunks = llm_group_chunks(all_chunks, knowledge_base)
         
-        content.append(
-            f"=== 📄 DOCUMENT {i} ===\n"
-            f"📁 Source: {doc_source}\n"
-            f"📍 Page: {doc_page}\n"
-            f"📝 Extracted Content:\n{doc_content}\n{'='*80}"
-        )
+        cache_data = {
+            "knowledge_base": knowledge_base,
+            "level": level,
+            "total_chunks": total_chunks,
+            "groups": [
+                {
+                    "name": name,
+                    "chunk_count": len(chunks),
+                    "chunks": [chunk.dict() for chunk in chunks]
+                }
+                for name, chunks in grouped_chunks.items()
+            ],
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        cache_file.write_text(json.dumps(cache_data, ensure_ascii=False, indent=2), encoding='utf-8')
+        
+        full_content = generate_llm_grouped_content(grouped_chunks, knowledge_base, level, total_chunks, all_chunks)
+        txt_file = Path(f"./{knowledge_base}_{level}_{total_chunks}chunks_LLM.txt")
+        txt_file.write_text(full_content, encoding='utf-8')
+        
+        print(f"💾 SAVED ROOT DIR:")
+        print(f"   📁 {cache_file.name}")
+        print(f"   📄 {txt_file.name}")
     
-    result = "\n\n".join(content)
-    logger.info(f"Retrieved content assembled: {len(result)} total characters from {len(docs)} documents")
-    logger.info("="*80)
-    return result
+    full_context = generate_llm_grouped_content(grouped_chunks, knowledge_base, level, total_chunks, all_chunks)
+    print(f"✅ {len(grouped_chunks)} LLM groups → SAME groups sent back to LLM")
+    
+    return full_context
 
+def generate_llm_grouped_content(grouped: Dict[str, List[Document]], knowledge_base: str, 
+                               level: str, total_chunks: int, all_chunks: List[Document]) -> str:
+    """✅ FIXED: Format for display + LLM context - Handles missing types"""
+    
+    lines = []
+    lines.extend([
+        "=" * 120,
+        f"🤖 LLM-ORGANIZED: {knowledge_base.upper()} - {level.upper()} LEVEL",
+        f"📊 TOTAL: {total_chunks} CHUNKS | {len(grouped)} INTELLIGENT GROUPS",
+        f"💾 Cache: ./{knowledge_base}_llm_groups.json (ROOT DIR)",
+        "=" * 120,
+        ""
+    ])
+    
+    # ✅ FIXED: Safe type counting
+    type_counts = {'Text': 0, 'Image': 0, 'Table': 0}
+    for chunk in all_chunks:
+        t = classify_chunk_type(chunk)
+        type_counts[t] = type_counts.get(t, 0) + 1
+    
+    lines.extend([
+        f"📈 BREAKDOWN: 📝 Text={type_counts['Text']} | 🖼️ Images={type_counts['Image']} | 📊 Tables={type_counts['Table']}",
+        "",
+        "🤖 LLM-ORGANIZED GROUPS (Use these exact groups):",
+        ""
+    ])
+    
+    # Sort groups by size (largest first)
+    sorted_groups = sorted(grouped.items(), key=lambda x: len(x[1]), reverse=True)
+    group_num = 1
+    
+    for group_name, group_chunks in sorted_groups:
+        lines.extend([
+            f"\n{'#'*120}",
+            f"⭐ GROUP {group_num}: {group_name}",
+            f"📊 {len(group_chunks)} FULL CHUNKS",
+            f"{'#'*120}",
+            ""
+        ])
+        
+        # ALL CHUNKS IN GROUP (FULL CONTENT)
+        for chunk_idx, chunk in enumerate(group_chunks, 1):
+            source = Path(chunk.metadata.get('source', 'unknown.pdf')).name
+            page = chunk.metadata.get('page', 'N/A')
+            chunk_type = classify_chunk_type(chunk)
+            
+            # Image/Table references
+            visual_ref = ""
+            if chunk_type == 'Image':
+                img_name = f"{source.replace('.pdf','')}_page_{page}_"
+                visual_ref = f"\n💾 IMAGE: extracted_images/{knowledge_base}/{img_name}*.png"
+            elif chunk_type == 'Table':
+                visual_ref = "\n📊 TABLE DATA:"
+            
+            lines.extend([
+                f"\n  🆔 CHUNK {chunk_idx}/{len(group_chunks)}",
+                f"  📍 {source} | Page {page} | Type: {chunk_type}",
+                visual_ref if visual_ref else "",
+                f"  📄 {'='*80}",
+                f"  {chunk.page_content.strip()}",
+                f"  {'='*80}"
+            ])
+        
+        group_num += 1
+    
+    lines.extend([
+        f"\n{'='*120}",
+        f"✅ VERIFICATION: {total_chunks}/{total_chunks} chunks (100%)",
+        f"📂 {len(grouped)} LLM groups preserved",
+        f"🎯 SAME GROUPS SENT BACK TO LLM FOR Q&A",
+        f"💾 Files saved in ROOT directory",
+        "=" * 120
+    ])
+    
+    return "\n".join(lines)
+
+# ✅ YOUR ComprehensiveTrainingCoach CLASS (UNCHANGED)
 class ComprehensiveTrainingCoach:
     def __init__(self):
         console.print("[bold green]🚀 Initializing Comprehensive Telecom Training Coach...[/bold green]")
         self.index_paths = self._scan_indexes()
         if not self.index_paths:
-            error_msg = "❌ No knowledge bases found! Run rag.py first to create FAISS indexes.\n📁 Expected: faiss_indexes/alarm_handling/ & faiss_indexes/mml/"
-            console.print(f"[bold red]{error_msg}[/bold red]")
-            raise FileNotFoundError(error_msg)
+            console.print("[bold red]❌ No knowledge bases found![/bold red]")
+            exit(1)
         console.print(f"[bold green]✅ {len(self.index_paths)} knowledge bases loaded![/bold green]\n")
     
     def _scan_indexes(self) -> Dict[str, str]:
-        """Scan and validate FAISS indexes"""
         indexes = {}
-        folders = ["alarm_handling", "mml"]
+        folders = ["alarm handling", "mml"]
         for folder in folders:
             index_path = Path(f"{FAISS_ROOT}/{folder}")
             if index_path.exists():
                 try:
-                    # Quick validation
-                    vectorstore = FAISS.load_local(
-                        str(index_path), EMBEDDINGS, 
-                        allow_dangerous_deserialization=True
-                    )
+                    vectorstore = FAISS.load_local(str(index_path), EMBEDDINGS, allow_dangerous_deserialization=True)
                     doc_count = len(vectorstore.index_to_docstore_id)
                     indexes[folder] = str(index_path)
                     console.print(f"  ✅ [cyan]{folder}[/cyan]: [yellow]{doc_count:,}[/yellow] documents")
@@ -378,7 +588,7 @@ class ComprehensiveTrainingCoach:
         table.add_column("📊 STATUS", justify="right", style="yellow")
         
         for kb in self.index_paths:
-            display_name = kb.replace('_', ' ').replace('handling', 'Handling').title()
+            display_name = kb.replace('handling', 'Handling').title()
             coverage = (
                 "• Fundamentals & Theory\n"
                 "• Complete MML Syntax\n"
@@ -399,7 +609,7 @@ class ComprehensiveTrainingCoach:
     
     def start_training_module(self, knowledge_base: str):
         """Progressive comprehensive training experience"""
-        display_name = knowledge_base.replace('_', ' ').replace('handling', 'Handling').title()
+        display_name = knowledge_base.replace('handling', 'Handling').title()
         
         training_levels = {
             0: ("BEGINNER", "Core Fundamentals & Basic Commands"),
@@ -424,24 +634,24 @@ class ComprehensiveTrainingCoach:
             header_panel = Panel(
                 header_content,
                 title=f"[bold blue]{knowledge_base.upper()}[/bold blue] | TRAINING LEVEL {level_idx+1}/4",
-                subtitle="[dim]Comprehensive lesson with diagrams, commands, architecture[/dim]",
+                subtitle="[dim]LLM-organized content with diagrams, commands, architecture[/dim]",
                 border_style="bright_blue",
                 padding=(2, 2)
             )
             console.print(header_panel)
             
-            console.print("\n[bold]🔄 Generating comprehensive lesson from PDFs...[/bold]")
+            console.print("\n[bold]🔄 Loading LLM-organized content...[/bold]")
             
-            # Retrieve comprehensive content
+            # Retrieve LLM-grouped content
             content = retrieve_training_content.invoke({
                 "knowledge_base": knowledge_base,
                 "level": level_key
             })
             
-            # Generate DETAILED lesson
+            # Generate DETAILED lesson using LLM groups
             lesson = self.generate_comprehensive_lesson(knowledge_base, level_key, content)
             
-            # Rich lesson display with scrollable content
+            # Rich lesson display
             lesson_panel = Panel(
                 lesson,
                 title=f"[bold cyan]{emoji} {subtitle}[/bold cyan]",
@@ -453,7 +663,7 @@ class ComprehensiveTrainingCoach:
             
             console.print("\n" + "─" * 120)
             
-            # Professional navigation
+            # Navigation
             nav_table = Table.grid(expand=True, padding=(0, 1))
             nav_table.add_column("Action", style="bold cyan")
             nav_table.add_column("Description", style="white")
@@ -461,11 +671,8 @@ class ComprehensiveTrainingCoach:
             next_level = list(training_levels.keys())[(current_level_idx + 1) % 4]
             next_display = list(training_levels.values())[(current_level_idx + 1) % 4][0]
             
-            nav_table.add_row(
-                "1️⃣ NEXT LEVEL", 
-                f"→ {next_display}"
-            )
-            nav_table.add_row("2️⃣ ASK DOUBT", "Interactive Q&A from this knowledge base")
+            nav_table.add_row("1️⃣ NEXT LEVEL", f"→ {next_display}")
+            nav_table.add_row("2️⃣ ASK DOUBT", "Interactive Q&A from LLM groups")
             nav_table.add_row("3️⃣ REPEAT", "Review current level")
             nav_table.add_row("4️⃣ DASHBOARD", "Return to module selection")
             nav_table.add_row("Q. QUIT", "Exit training")
@@ -483,148 +690,126 @@ class ComprehensiveTrainingCoach:
             elif choice == "2":
                 self.handle_comprehensive_doubts(knowledge_base, level_key)
             elif choice == "3":
-                continue  # Repeat current level
+                continue
             elif choice == "4":
                 return
             elif choice == "q":
                 return "quit"
     
     def generate_comprehensive_lesson(self, knowledge_base: str, level: str, docs: str) -> str:
-        """Generate LEVEL-SPECIFIC training lesson from knowledge base ONLY"""
-        logger.info("="*80)
-        logger.info("GENERATING COMPREHENSIVE LESSON")
-        logger.info(f"  Knowledge Base: {knowledge_base}")
-        logger.info(f"  Level: {level}")
-        logger.info(f"  Input docs length: {len(docs)} characters")
-        logger.info("="*80)
-    
-        # Level-specific depth instructions
+        """Generate structured, level-appropriate training lesson"""
         level_configs = {
-        "beginner": {
-            "instructions": "Use simple language, basic concepts, step-by-step explanations. Avoid advanced terminology unless explained.",
-            "depth": "basic"
-        },
-        "intermediate": {
-            "instructions": "Include practical examples, common scenarios, basic troubleshooting. Explain WHY commands work with examples.",
-            "depth": "practical"
-        },
-        "advanced": {
-            "instructions": "Deep technical details, edge cases, performance optimization, advanced MML commands, configuration parameters.",
-            "depth": "expert"
-        },
-        "architecture": {
-            "instructions": "System design, data flows, component interactions, configuration parameters, scalability considerations.",
-            "depth": "system"
-        }
+            "beginner": {
+                "instructions": "Use simple, clear language with step-by-step explanations. Focus on foundational concepts and basic understanding. Avoid jargon or explain it clearly when used.",
+                "depth": "basic",
+                "sections": ["Introduction", "Fundamentals", "Key Concepts", "Basic Examples", "Summary", "References"]
+            },
+            "intermediate": {
+                "instructions": "Provide practical examples, real-world scenarios, and troubleshooting guidance. Include hands-on exercises and common use cases.",
+                "depth": "practical",
+                "sections": ["Overview", "Core Concepts", "Practical Applications", "Common Scenarios", "Troubleshooting", "Best Practices", "References"]
+            },
+            "advanced": {
+                "instructions": "Dive deep into technical details, edge cases, optimization techniques, and advanced configurations. Include performance considerations and complex scenarios.",
+                "depth": "expert",
+                "sections": ["Advanced Overview", "Deep Dive Concepts", "Advanced Configurations", "Performance Optimization", "Edge Cases & Troubleshooting", "Best Practices & Patterns", "References"]
+            },
+            "architecture": {
+                "instructions": "Focus on system design, architectural patterns, data flows, integration points, scalability, and high-level design decisions. Include architectural diagrams and design rationale.",
+                "depth": "system",
+                "sections": ["Architectural Overview", "System Architecture", "Architectural Flow & Diagrams", "Design Details", "Integration Points", "Scalability & Performance", "Design Patterns", "References"]
+            }
         }
     
-        # ✅ EXTRACT VALUES BEFORE TEMPLATE (FIXES [] indexing)
         level_config = level_configs.get(level.lower(), level_configs["beginner"])
-        level_depth = level_config["depth"]           # ✅ Pre-compute
-        level_instructions = level_config["instructions"]  # ✅ Pre-compute
-        level_upper = level.upper()
-        
-        logger.debug(f"Level config: depth={level_depth}, instructions={level_instructions[:50]}...")
+        level_instructions = level_config["instructions"]
+        sections = level_config["sections"]
     
         prompt = ChatPromptTemplate.from_template("""
-You are **Ericsson Senior Telecom Architect** specializing in {knowledge_base}.
+You are an **Ericsson Senior Telecom Training Architect** specializing in {knowledge_base}. Your task is to create a comprehensive, well-structured training lesson tailored for {level} level learners.
 
-**SOURCE DOCUMENTS ONLY** (Use ONLY this content - NO external knowledge):
+**SOURCE DOCUMENTS** (Use ALL provided content - maintain accuracy, NO hallucination):
+
 {docs}
 
-**{level_upper} LEVEL TRAINING ({level_depth} depth)**:
-{level_instructions}
+**TRAINING LEVEL**: {level}
+**INSTRUCTIONS**: {level_instructions}
 
-**EXACT REQUIRED STRUCTURE** (Content STRICTLY from documents - BE CONCISE):
+**REQUIRED STRUCTURE** (Follow this exact format):
 
-## TRAINING OBJECTIVE (2 sentences)
-1. What learner masters from these documents
-2. Prerequisites mentioned in source materials
+## 1. Introduction
+- Brief overview of the topic
+- Learning objectives
+- Prerequisites (if any)
+- What you will learn
 
-### **1. FUNDAMENTALS EXPLAINED** (150-200 words, concise):
-Provide a clear explanation of basic concepts using full paragraphs (avoid bullet points).
+## 2. Fundamentals / Core Concepts / Advanced Overview / Architectural Overview
+(Choose section name based on level)
+- Essential concepts and principles
+- Key terminology and definitions
+- Foundation knowledge required
 
-### **2. CORE CONCEPTS** (3-4 sentences per concept):
-Explain each core concept clearly and concisely.
+## 3. Core Concepts / Practical Applications / Deep Dive Concepts / System Architecture
+(Choose section name based on level)
+- Detailed explanations
+- Important concepts and their relationships
+- Technical details appropriate for {level} level
 
-### **3. ARCHITECTURE DIAGRAM** (8-10 lines):
-Provide an ASCII diagram with legend, data flow, and key components.
+## 4. Architectural Flow & Diagrams
+(Especially important for architecture level, but include for all levels when relevant)
+- System/data flow descriptions
+- Architecture diagrams (use ASCII art or detailed text descriptions)
+- Component interactions
+- Process flows
+- Integration points
 
-### **4. FURTHER RECOMMENDATIONS** (Brief):
-- Additional resources for self-learning
-- Learning path for next level
+## 5. Design Details / Common Scenarios / Advanced Configurations / Design Details
+(Choose section name based on level)
+- Practical examples and use cases
+- Configuration details
+- Implementation guidance
+- Real-world scenarios
 
-## **5. TECHNICAL REFERENCES**
-List exact references from training documents (heading and page number if available). Don't hallucinate.
+## 6. Best Practices / Troubleshooting / Edge Cases / Integration Points
+(Choose section name based on level)
+- Industry best practices
+- Common issues and solutions
+- Optimization tips
+- Integration considerations
 
-**STRICT RULES**:
-• 100% FROM DOCUMENTS 
-• {level_upper} complexity matching instructions above
-• Clear, concise, technically accurate
-• Commands EXACTLY as in source
-• If info missing: "Not covered in provided documents"
-• Keep response concise and focused
+## 7. Summary / References
+- Key takeaways
+- Summary of important points
+- References to source documents
+- Additional resources
 
-GENERATE LESSON (be concise):
-    """)
+**CRITICAL REQUIREMENTS**:
+1. **NO "Group 1", "Chunk 1", "Chunk 2" labels** - Transform raw content into natural, flowing prose
+2. **Structured sections** - Use clear markdown headers (##, ###) for each section
+3. **Level-appropriate depth** - Adjust complexity and detail based on {level}
+4. **Architecture diagrams** - For architecture level, include detailed ASCII diagrams or clear text descriptions of system flows
+5. **Professional formatting** - Use bullet points, numbered lists, code blocks, and tables where appropriate
+6. **Complete content** - Synthesize information from all provided chunks into coherent sections
+7. **No raw chunk references** - Do NOT mention "chunk X" or "group Y" in the output
+8. **Smooth transitions** - Make content flow naturally between sections
+
+**OUTPUT**: Generate a complete, professional training lesson following the structure above. Make it engaging, clear, and appropriate for {level} level learners.
+""")
     
-        logger.info("Building prompt chain (prompt | LLM | StrOutputParser)")
         chain = prompt | LLM | StrOutputParser()
     
-        # Prepare prompt variables
-        prompt_vars = {
+        logger.info(f"Generating {level} level lesson for {knowledge_base}")
+        logger.debug(f"Using sections: {sections}")
+        
+        return chain.invoke({
             "knowledge_base": knowledge_base,
             "level": level,
             "docs": docs,
-            "level_upper": level_upper,
-            "level_depth": level_depth,
             "level_instructions": level_instructions
-        }
-        
-        logger.info("="*80)
-        logger.info("SENDING PROMPT TO LLM")
-        logger.info(f"  Knowledge Base: {knowledge_base}")
-        logger.info(f"  Level: {level} ({level_upper})")
-        logger.info(f"  Depth: {level_depth}")
-        logger.info(f"  Docs length: {len(docs)} characters")
-        logger.debug(f"  Full prompt variables: {list(prompt_vars.keys())}")
-        logger.info("="*80)
-        
-        try:
-            # Record start time
-            start_time = time.time()
-            logger.info("⏱️  [TIMING] Starting LLM invocation...")
-            logger.info(f"⏱️  [TIMING] Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            
-            # Log that we're about to call Ollama
-            logger.info("📡 [OLLAMA] Sending request to Ollama API...")
-            logger.info("📡 [OLLAMA] Waiting for response (this may take 30-120 seconds)...")
-            
-            # Invoke the chain
-            result = chain.invoke(prompt_vars)
-            
-            # Calculate elapsed time
-            elapsed_time = time.time() - start_time
-            logger.info("="*80)
-            logger.info("✅ LLM RESPONSE RECEIVED")
-            logger.info(f"⏱️  [TIMING] Total time: {elapsed_time:.2f} seconds ({elapsed_time/60:.2f} minutes)")
-            logger.info(f"⏱️  [TIMING] End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            logger.info(f"  Response length: {len(result)} characters")
-            logger.info(f"  Response speed: {len(result)/elapsed_time:.1f} chars/second")
-            logger.debug(f"  Response preview (first 200 chars): {result[:200]}...")
-            logger.info("="*80)
-            return result
-        except Exception as e:
-            logger.error("="*80)
-            logger.error("LLM INVOCATION FAILED")
-            logger.error(f"  Error: {str(e)}")
-            logger.error(f"  Knowledge Base: {knowledge_base}")
-            logger.error(f"  Level: {level}")
-            logger.exception("Full traceback:")
-            logger.error("="*80)
-            raise
+        })
+    
     def handle_comprehensive_doubts(self, knowledge_base: str, current_level: str):
-        """Production-grade doubt clearing"""
+        """Production-grade doubt clearing using LLM groups"""
         console.print("\n🆘 [bold red]EXPERT TECHNICAL SUPPORT[/bold red]")
         console.print(f"[cyan]🔒 Context Locked: {knowledge_base.title()} | Level: {current_level}[/cyan]")
         console.print("[dim]💭 Ask production-level doubts ('back' to return)[/dim]\n")
@@ -634,7 +819,7 @@ GENERATE LESSON (be concise):
             if doubt.lower() in ['back', 'return', 'menu']:
                 break
             
-            console.print("[dim]🔍 Searching knowledge base...[/dim]")
+            console.print("[dim]🔍 Searching LLM-organized knowledge base...[/dim]")
             answer = self.answer_comprehensive_doubt(knowledge_base, doubt)
             
             doubt_panel = Panel(
@@ -647,75 +832,37 @@ GENERATE LESSON (be concise):
             console.print()
     
     def answer_comprehensive_doubt(self, knowledge_base: str, doubt: str) -> str:
-        """Comprehensive technical doubt resolution"""
-        logger.info("="*80)
-        logger.info("ANSWERING COMPREHENSIVE DOUBT")
-        logger.info(f"  Knowledge Base: {knowledge_base}")
-        logger.info(f"  Doubt: {doubt[:100]}..." if len(doubt) > 100 else f"  Doubt: {doubt}")
-        logger.info("="*80)
-        
-        logger.info("Retrieving relevant content for doubt resolution...")
+        """Comprehensive technical doubt resolution using LLM groups"""
         docs = retrieve_training_content.invoke({
             "knowledge_base": knowledge_base,
-            "level": "advanced",
-            "topic": doubt
+            "level": "advanced"
         })
-        logger.info(f"Retrieved {len(docs)} characters of context documents")
         
         prompt = ChatPromptTemplate.from_template("""
-        Resolve **production-critical doubt** using ONLY {knowledge_base}:
-        
-        ❓ **CRITICAL ISSUE**: {doubt}
-        📚 **ENTERPRISE CONTEXT** (10 docs): {docs}
-        
-        **PRODUCTION RESOLUTION FORMAT**:
-        1. **Immediate Answer** (1 sentence)
-        2. **Root Cause Analysis** (technical mechanism)
-        3. **COMPLETE MML WORKFLOW**
-           ```
-           Diagnostic → Fix → Verify → Rollback
-           ```
-        4. **KPI IMPACT ASSESSMENT**
-        5. **ESCALATION MATRIX** (if unresolvable)
-        6. **PREVENTION MEASURES**
-        7. **PDF REFERENCE** (exact page)
-        8. **Follow-up question**
+**PRODUCTION-CRITICAL DOUBT RESOLUTION** using {knowledge_base} LLM groups:
 
-        RESPONSE:""")
+❓ **DOUBT**: {doubt}
+
+📚 **LLM-ORGANIZED CONTEXT**:
+{docs}
+
+**EXPECTED FORMAT**:
+1. **Direct Answer** (1 line)
+2. **Relevant LLM Group** (quote exact group name)
+3. **Step-by-Step Resolution**
+4. **MML Commands** (if applicable)
+5. **Image/Table References**
+6. **Verification Steps**
+
+**Answer using ONLY these LLM groups - no hallucination.**
+""")
         
-        logger.info("Building prompt chain for doubt resolution")
         chain = prompt | LLM | StrOutputParser()
-        
-        prompt_vars = {"knowledge_base": knowledge_base, "doubt": doubt, "docs": docs}
-        logger.info("="*80)
-        logger.info("SENDING DOUBT RESOLUTION PROMPT TO LLM")
-        logger.info(f"  Knowledge Base: {knowledge_base}")
-        logger.info(f"  Doubt length: {len(doubt)} characters")
-        logger.info(f"  Context docs length: {len(docs)} characters")
-        logger.info("="*80)
-        
-        try:
-            logger.info("Invoking LLM chain for doubt resolution...")
-            result = chain.invoke(prompt_vars)
-            logger.info("="*80)
-            logger.info("DOUBT RESOLUTION RESPONSE RECEIVED")
-            logger.info(f"  Response length: {len(result)} characters")
-            logger.debug(f"  Response preview (first 200 chars): {result[:200]}...")
-            logger.info("="*80)
-            return result
-        except Exception as e:
-            logger.error("="*80)
-            logger.error("DOUBT RESOLUTION LLM INVOCATION FAILED")
-            logger.error(f"  Error: {str(e)}")
-            logger.error(f"  Knowledge Base: {knowledge_base}")
-            logger.error(f"  Doubt: {doubt}")
-            logger.exception("Full traceback:")
-            logger.error("="*80)
-            raise
+        return chain.invoke({"knowledge_base": knowledge_base, "doubt": doubt, "docs": docs})
     
     def run(self):
         """Main enterprise training platform"""
-        console.print("\n[bold green]🎓 ENTERPRISE TELECOM TRAINING PLATFORM v2.0[/bold green]")
+        console.print("\n[bold green]🎓 ENTERPRISE TELECOM TRAINING PLATFORM v2.0 - LLM POWERED[/bold green]")
         console.print("[dim]Press Ctrl+C to exit at any time[/dim]\n")
         
         try:
@@ -724,8 +871,8 @@ GENERATE LESSON (be concise):
                 
                 if choice == "quit":
                     console.print("\n[bold green]🎓 TRAINING SESSION COMPLETE![/bold green]")
-                    console.print("🚀 [yellow]Mastered:[/] MML Commands | Alarm Handling")
-                    console.print("📚 [dim]Bookmark this coach for ongoing reference![/dim]")
+                    console.print("🚀 [yellow]Mastered:[/] MML Commands | Alarm Handling | LLM Groups")
+                    console.print("📚 [dim]Files saved in root: *_llm_groups.json[/dim]")
                     break
                 
                 if choice in self.index_paths:

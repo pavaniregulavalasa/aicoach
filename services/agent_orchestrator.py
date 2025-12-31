@@ -19,20 +19,19 @@ class AgentOrchestrator:
         logger.debug("AssessmentAgent created")
         logger.info("AgentOrchestrator initialization complete")
     
-    def route_to_training_agent(self, level: str, knowledge_base: str = "mml", topic: str = ""):
+    def route_to_training_agent(self, level: str, knowledge_base: str = "mml"):
         """
         Route training request to training agent
         
         Args:
             level: Training level ('beginner', 'intermediate', 'advanced', 'architecture')
             knowledge_base: Knowledge base to use ('mml' or 'alarm_handling')
-            topic: Optional specific topic for doubt clearing (currently not used but kept for API compatibility)
         
         Returns:
             Response from training agent
         """
         logger.info(f"Orchestrator: Routing to TrainingAgent")
-        logger.debug(f"  Parameters: level={level}, knowledge_base={knowledge_base}, topic={topic}")
+        logger.debug(f"  Parameters: level={level}, knowledge_base={knowledge_base}")
         response = self.training_agent.handle_request(level, knowledge_base)
         logger.debug(f"TrainingAgent response received, keys: {list(response.keys()) if isinstance(response, dict) else 'N/A'}")
         return response

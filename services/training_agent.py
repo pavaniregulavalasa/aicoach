@@ -1,6 +1,4 @@
 import logging
-import time
-from datetime import datetime
 from services.ai_coach import ComprehensiveTrainingCoach
 import services.ai_coach
 
@@ -25,235 +23,67 @@ class TrainingAgent:
         logger.info(f"  Knowledge Base: {knowledge_base}")
         logger.info("="*80)
         
-        # Based on the level, generate appropriate training content
-        if level == "beginner":
-            logger.info("Routing to beginner content generation")
-            return self.generate_beginner_content(knowledge_base)
-        elif level == "intermediate":
-            logger.info("Routing to intermediate content generation")
-            return self.generate_intermediate_content(knowledge_base)
-        elif level == "advanced":
-            logger.info("Routing to advanced content generation")
-            return self.generate_advanced_content(knowledge_base)
-        elif level == "architecture":
-            logger.info("Routing to architecture content generation")
-            return self.generate_architecture_content(knowledge_base)
-        else:
+        # Validate level
+        valid_levels = ["beginner", "intermediate", "advanced", "architecture"]
+        if level not in valid_levels:
             logger.warning(f"Invalid level requested: {level}")
-            return {"error": "Invalid level. Please choose 'beginner', 'intermediate', 'advanced', or 'architecture'."}
+            return {
+                "error": "Invalid level",
+                "message": f"Invalid level '{level}'. Please choose one of: {', '.join(valid_levels)}."
+            }
+        
+        logger.info(f"Routing to {level} content generation")
+        return self.generate_content(level, knowledge_base)
 
-    def generate_beginner_content(self,knowledge_base):
-        overall_start = time.time()
+    def generate_content(self, level: str, knowledge_base: str):
+        """
+        Generate training content for a given level and knowledge base.
+        Refactored to eliminate code duplication - single method handles all levels.
+        
+        Args:
+            level: Training level ('beginner', 'intermediate', 'advanced', 'architecture')
+            knowledge_base: Knowledge base to use ('mml' or 'alarm_handling')
+        
+        Returns:
+            Dictionary with training_content or error information
+        """
         logger.info("="*80)
-        logger.info("🚀 GENERATING BEGINNER CONTENT")
+        logger.info(f"GENERATING {level.upper()} CONTENT")
         logger.info(f"  Knowledge Base: {knowledge_base}")
-        logger.info(f"⏱️  [TIMING] Overall start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         logger.info("="*80)
         
-        # Generate beginner-level training content
         try:
-            # Step 1: FAISS retrieval
-            step1_start = time.time()
-            logger.info("📚 [STEP 1] Retrieving training content from FAISS...")
+            # Step 1: Retrieve training content from FAISS
+            logger.info("Step 1: Retrieving training content from FAISS")
             content = retrieve_training_content.invoke({
-                    "knowledge_base": knowledge_base,
-                    "level": "beginner"
-                })
-            step1_elapsed = time.time() - step1_start
-            logger.info(f"✅ [STEP 1] Completed in {step1_elapsed:.2f} seconds")
-            logger.info(f"📊 [STEP 1] Retrieved content length: {len(content)} characters")
+                "knowledge_base": knowledge_base,
+                "level": level
+            })
+            logger.info(f"Retrieved content length: {len(content)} characters")
             
-            # Step 2: LLM generation
-            step2_start = time.time()
-            logger.info("🤖 [STEP 2] Generating comprehensive lesson via LLM...")
-            logger.info("🤖 [STEP 2] This is the longest step - LLM generation can take 30-120 seconds...")
-            lesson = self.comprehensive_coach.generate_comprehensive_lesson(knowledge_base, "beginner", content)
-            step2_elapsed = time.time() - step2_start
-            logger.info(f"✅ [STEP 2] Completed in {step2_elapsed:.2f} seconds ({step2_elapsed/60:.2f} minutes)")
-            logger.info(f"📊 [STEP 2] Generated lesson length: {len(lesson)} characters")
+            # Step 2: Generate comprehensive lesson via LLM
+            logger.info("Step 2: Generating comprehensive lesson via LLM")
+            lesson = self.comprehensive_coach.generate_comprehensive_lesson(knowledge_base, level, content)
+            logger.info(f"Generated lesson length: {len(lesson)} characters")
             
-            overall_elapsed = time.time() - overall_start
-            logger.info("="*80)
-            logger.info("✅ Beginner content generation completed successfully")
-            logger.info(f"⏱️  [TIMING] Total time: {overall_elapsed:.2f} seconds ({overall_elapsed/60:.2f} minutes)")
-            logger.info(f"⏱️  [TIMING] Breakdown - FAISS: {step1_elapsed:.2f}s, LLM: {step2_elapsed:.2f}s")
-            logger.info("="*80)
+            logger.info(f"{level.title()} content generation completed successfully")
             return {
                 "training_content": lesson
             }
         except Exception as e:
             error_msg = str(e)
-            logger.error(f"Error generating beginner content: {error_msg}")
+            logger.error(f"Error generating {level} content: {error_msg}")
             logger.exception("Full traceback:")
             
+            # Check for connection-related errors
             if "Connection" in error_msg or "connection" in error_msg.lower() or "timeout" in error_msg.lower():
                 logger.error("Connection-related error detected")
                 return {
                     "error": "LLM Connection Error",
                     "message": f"Unable to connect to the AI model service. Please check your network connection and Ericsson ELI gateway access. Error: {error_msg}"
                 }
-            return {
-                "error": "Training Generation Error",
-                "message": f"Failed to generate training content: {error_msg}"
-            }
-
-    def generate_intermediate_content(self,knowledge_base):
-        overall_start = time.time()
-        logger.info("="*80)
-        logger.info("🚀 GENERATING INTERMEDIATE CONTENT")
-        logger.info(f"  Knowledge Base: {knowledge_base}")
-        logger.info(f"⏱️  [TIMING] Overall start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        logger.info("="*80)
-        
-        try:
-            # Step 1: FAISS retrieval
-            step1_start = time.time()
-            logger.info("📚 [STEP 1] Retrieving training content from FAISS...")
-            content = retrieve_training_content.invoke({
-                    "knowledge_base": knowledge_base,
-                    "level": "intermediate"
-                })
-            step1_elapsed = time.time() - step1_start
-            logger.info(f"✅ [STEP 1] Completed in {step1_elapsed:.2f} seconds")
-            logger.info(f"📊 [STEP 1] Retrieved content length: {len(content)} characters")
             
-            # Step 2: LLM generation
-            step2_start = time.time()
-            logger.info("🤖 [STEP 2] Generating comprehensive lesson via LLM...")
-            logger.info("🤖 [STEP 2] This is the longest step - LLM generation can take 30-120 seconds...")
-            lesson = self.comprehensive_coach.generate_comprehensive_lesson(knowledge_base, "intermediate", content)
-            step2_elapsed = time.time() - step2_start
-            logger.info(f"✅ [STEP 2] Completed in {step2_elapsed:.2f} seconds ({step2_elapsed/60:.2f} minutes)")
-            logger.info(f"📊 [STEP 2] Generated lesson length: {len(lesson)} characters")
-            
-            overall_elapsed = time.time() - overall_start
-            logger.info("="*80)
-            logger.info("✅ Intermediate content generation completed successfully")
-            logger.info(f"⏱️  [TIMING] Total time: {overall_elapsed:.2f} seconds ({overall_elapsed/60:.2f} minutes)")
-            logger.info(f"⏱️  [TIMING] Breakdown - FAISS: {step1_elapsed:.2f}s, LLM: {step2_elapsed:.2f}s")
-            logger.info("="*80)
-            return {
-                "training_content": lesson
-            }
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Error generating intermediate content: {error_msg}")
-            logger.exception("Full traceback:")
-            
-            if "Connection" in error_msg or "connection" in error_msg.lower() or "timeout" in error_msg.lower():
-                logger.error("Connection-related error detected")
-                return {
-                    "error": "LLM Connection Error",
-                    "message": f"Unable to connect to the AI model service. Please check your network connection and Ericsson ELI gateway access. Error: {error_msg}"
-                }
-            return {
-                "error": "Training Generation Error",
-                "message": f"Failed to generate training content: {error_msg}"
-            }
-
-    def generate_advanced_content(self,knowledge_base):
-        overall_start = time.time()
-        logger.info("="*80)
-        logger.info("🚀 GENERATING ADVANCED CONTENT")
-        logger.info(f"  Knowledge Base: {knowledge_base}")
-        logger.info(f"⏱️  [TIMING] Overall start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        logger.info("="*80)
-        
-        try:
-            # Step 1: FAISS retrieval
-            step1_start = time.time()
-            logger.info("📚 [STEP 1] Retrieving training content from FAISS...")
-            content = retrieve_training_content.invoke({
-                    "knowledge_base": knowledge_base,
-                    "level": "advanced"
-                })
-            step1_elapsed = time.time() - step1_start
-            logger.info(f"✅ [STEP 1] Completed in {step1_elapsed:.2f} seconds")
-            logger.info(f"📊 [STEP 1] Retrieved content length: {len(content)} characters")
-            
-            # Step 2: LLM generation
-            step2_start = time.time()
-            logger.info("🤖 [STEP 2] Generating comprehensive lesson via LLM...")
-            logger.info("🤖 [STEP 2] This is the longest step - LLM generation can take 30-120 seconds...")
-            lesson = self.comprehensive_coach.generate_comprehensive_lesson(knowledge_base, "advanced", content)
-            step2_elapsed = time.time() - step2_start
-            logger.info(f"✅ [STEP 2] Completed in {step2_elapsed:.2f} seconds ({step2_elapsed/60:.2f} minutes)")
-            logger.info(f"📊 [STEP 2] Generated lesson length: {len(lesson)} characters")
-            
-            overall_elapsed = time.time() - overall_start
-            logger.info("="*80)
-            logger.info("✅ Advanced content generation completed successfully")
-            logger.info(f"⏱️  [TIMING] Total time: {overall_elapsed:.2f} seconds ({overall_elapsed/60:.2f} minutes)")
-            logger.info(f"⏱️  [TIMING] Breakdown - FAISS: {step1_elapsed:.2f}s, LLM: {step2_elapsed:.2f}s")
-            logger.info("="*80)
-            return {
-                "training_content": lesson
-            }
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Error generating advanced content: {error_msg}")
-            logger.exception("Full traceback:")
-            
-            if "Connection" in error_msg or "connection" in error_msg.lower() or "timeout" in error_msg.lower():
-                logger.error("Connection-related error detected")
-                return {
-                    "error": "LLM Connection Error",
-                    "message": f"Unable to connect to the AI model service. Please check your network connection and Ericsson ELI gateway access. Error: {error_msg}"
-                }
-            return {
-                "error": "Training Generation Error",
-                "message": f"Failed to generate training content: {error_msg}"
-            }
-
-    def generate_architecture_content(self, knowledge_base):
-        overall_start = time.time()
-        logger.info("="*80)
-        logger.info("🚀 GENERATING ARCHITECTURE CONTENT")
-        logger.info(f"  Knowledge Base: {knowledge_base}")
-        logger.info(f"⏱️  [TIMING] Overall start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        logger.info("="*80)
-        
-        try:
-            # Step 1: FAISS retrieval
-            step1_start = time.time()
-            logger.info("📚 [STEP 1] Retrieving training content from FAISS...")
-            content = retrieve_training_content.invoke({
-                    "knowledge_base": knowledge_base,
-                    "level": "architecture"
-                })
-            step1_elapsed = time.time() - step1_start
-            logger.info(f"✅ [STEP 1] Completed in {step1_elapsed:.2f} seconds")
-            logger.info(f"📊 [STEP 1] Retrieved content length: {len(content)} characters")
-            
-            # Step 2: LLM generation
-            step2_start = time.time()
-            logger.info("🤖 [STEP 2] Generating comprehensive lesson via LLM...")
-            logger.info("🤖 [STEP 2] This is the longest step - LLM generation can take 30-120 seconds...")
-            lesson = self.comprehensive_coach.generate_comprehensive_lesson(knowledge_base, "architecture", content)
-            step2_elapsed = time.time() - step2_start
-            logger.info(f"✅ [STEP 2] Completed in {step2_elapsed:.2f} seconds ({step2_elapsed/60:.2f} minutes)")
-            logger.info(f"📊 [STEP 2] Generated lesson length: {len(lesson)} characters")
-            
-            overall_elapsed = time.time() - overall_start
-            logger.info("="*80)
-            logger.info("✅ Architecture content generation completed successfully")
-            logger.info(f"⏱️  [TIMING] Total time: {overall_elapsed:.2f} seconds ({overall_elapsed/60:.2f} minutes)")
-            logger.info(f"⏱️  [TIMING] Breakdown - FAISS: {step1_elapsed:.2f}s, LLM: {step2_elapsed:.2f}s")
-            logger.info("="*80)
-            return {
-                "training_content": lesson
-            }
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Error generating architecture content: {error_msg}")
-            logger.exception("Full traceback:")
-            
-            if "Connection" in error_msg or "connection" in error_msg.lower() or "timeout" in error_msg.lower():
-                logger.error("Connection-related error detected")
-                return {
-                    "error": "LLM Connection Error",
-                    "message": f"Unable to connect to the AI model service. Please check your network connection and Ericsson ELI gateway access. Error: {error_msg}"
-                }
+            # Generic error response
             return {
                 "error": "Training Generation Error",
                 "message": f"Failed to generate training content: {error_msg}"

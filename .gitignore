@@ -227,3 +227,9 @@ models/
 # Log files
 logs/
 *.log
+
+# User data (authentication and progress tracking)
+data/
+
+# Generated documents
+generated_docs/

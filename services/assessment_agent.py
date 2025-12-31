@@ -1,3 +1,4 @@
+#assessment_agent
 import logging
 from services.ai_coach import ComprehensiveTrainingCoach
 import services.ai_coach
